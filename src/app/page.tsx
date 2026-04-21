@@ -1,4 +1,7 @@
+"use client"
+
 import { Button } from "@/components/ui/button";
+import { signIn } from "next-auth/react";
 
 export default function Home() {
   return (
@@ -46,6 +49,7 @@ export default function Home() {
         <div className="pt-4">
           <Button
             size="lg"
+            onClick={() => signIn("google", { callbackUrl: "/dashboard" })}
             className="bg-white hover:bg-slate-100 text-slate-900 font-medium px-8 py-3 h-auto text-base shadow-lg hover:shadow-xl transition-all duration-200 group"
           >
             <svg
