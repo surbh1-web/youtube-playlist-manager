@@ -35,7 +35,6 @@ export default function Dashboard() {
   const router = useRouter()
   const [categorizedPlaylists, setCategorizedPlaylists] = useState<Record<string, YouTubePlaylist[]>>({})
   const [loading, setLoading] = useState(true)
-  const [recategorizing, setRecategorizing] = useState(false)
   const [showHiddenPlaylists, setShowHiddenPlaylists] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [sortBy, setSortBy] = useState('name-az')
@@ -47,19 +46,23 @@ export default function Dashboard() {
   const [newPlaylists, setNewPlaylists] = useState<any[]>([])
   const [deletedCount, setDeletedCount] = useState<number>(0)
   const [cacheAge, setCacheAge] = useState<string>('')
+  const [recatProgress, setRecatProgress] = useState<string>('')
+  const [isRecatRunning, setIsRecatRunning] = useState<boolean>(false)
 
-  // Load hidden playlists from localStorage on mount
-  useEffect(() => {
-    // Only run on client side
-    if (typeof window === 'undefined') return
-    
+  const getHiddenPlaylists = (): string[] => {
     try {
-      const hidden = window.localStorage.getItem('hidden-playlists')
-      setHiddenPlaylists(hidden ? JSON.parse(hidden) : [])
+      if (typeof window === 'undefined') return []
+      const hidden = localStorage.getItem('hidden-playlists')
+      return hidden ? JSON.parse(hidden) : []
     } catch (error) {
       console.warn('Error reading hidden playlists:', error)
-      setHiddenPlaylists([])
+      return []
     }
+  }
+
+  useEffect(() => {
+    const hiddenPlaylists = getHiddenPlaylists()
+    setHiddenPlaylists(hiddenPlaylists)
   }, [])
 
   const getHiddenPlaylistsWithDetails = (): YouTubePlaylist[] => {
@@ -293,7 +296,6 @@ export default function Dashboard() {
       alert(`Error: Failed to load playlists. Please try again.`)
     } finally {
       setLoading(false)
-      setRecategorizing(false)
     }
   }
 
@@ -301,14 +303,50 @@ export default function Dashboard() {
     fetchPlaylistsAndCategories()
   }, [])
 
-  const handleRecategorize = () => {
+  const handleRecategorize = async () => {
+  setIsRecatRunning(true)
+  setRecatProgress('Fetching your playlists...')
+  try {
     if (typeof window !== 'undefined') {
       localStorage.removeItem('playlist-categories')
+      localStorage.removeItem('video-search-index')
     }
-    setRecategorizing(true)
-    fetchPlaylistsAndCategories(false)
+    setRecatProgress('Sending playlists to AI for categorization...')
+    const playlistsResponse = await fetch('/api/youtube/playlists', {
+      credentials: 'include'
+    })
+    if (!playlistsResponse.ok) throw new Error('Failed to fetch playlists')
+    const playlistsData = await playlistsResponse.json()
+    setRecatProgress('AI is categorizing your playlists. This takes 1-2 minutes...')
+    const categorizeResponse = await fetch('/api/categorize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ playlists: playlistsData.playlists })
+    })
+    if (!categorizeResponse.ok) throw new Error('Failed to categorize playlists')
+    const categorizeData = await categorizeResponse.json()
+    setRecatProgress('Saving results...')
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('playlist-categories', JSON.stringify({
+        categorizedPlaylists: categorizeData.categorizedPlaylists,
+        lastUpdated: new Date().toISOString()
+      }))
+    }
+    setCategorizedPlaylists(categorizeData.categorizedPlaylists)
+  } catch (error) {
+    console.error('Recategorization error:', error)
+    setRecatProgress('Error occurred. Please try again.')
+    setTimeout(() => {
+      setIsRecatRunning(false)
+      setRecatProgress('')
+    }, 3000)
+    return
   }
-
+  setIsRecatRunning(false)
+  setRecatProgress('')
+}
+  
   const getThumbnailUrl = (playlist: YouTubePlaylist) => {
     return playlist.snippet.thumbnails.high?.url ||
            playlist.snippet.thumbnails.medium?.url ||
@@ -410,7 +448,9 @@ export default function Dashboard() {
       
       // Save index to localStorage
       if (typeof window !== 'undefined') {
-        localStorage.setItem('video-search-index', JSON.stringify(videoIndex))
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('video-search-index', JSON.stringify(videoIndex))
+        }
       }
       
     } catch (error) {
@@ -553,16 +593,17 @@ export default function Dashboard() {
             </p>
           </div>
           <div className="flex flex-col sm:flex-row gap-2">
-            <button
-              onClick={handleRecategorize}
-              disabled={recategorizing}
-              className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg transition-colors flex items-center gap-2"
-            >
-              {recategorizing && (
-                <div className="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-              )}
-              Re-categorize All Playlists
-            </button>
+            {isRecatRunning ? (
+  <div className="text-center py-4">
+    <div className="text-white text-lg font-medium mb-2">Categorizing your playlists...</div>
+    <div className="text-gray-400 text-sm">{recatProgress}</div>
+    <div className="text-gray-500 text-xs mt-1">This may take 1-2 minutes. Please wait.</div>
+  </div>
+) : (
+  <button onClick={handleRecategorize} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">
+    Re-categorize All Playlists
+  </button>
+)}
             <button
               onClick={() => setShowHiddenPlaylists(true)}
               className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg transition-colors"
@@ -856,10 +897,10 @@ export default function Dashboard() {
                 ) : (
                   <button
                     onClick={handleRecategorize}
-                    disabled={recategorizing}
+                    disabled={isRecatRunning}
                     className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg transition-colors"
                   >
-                    {recategorizing ? 'Categorizing...' : 'Categorize Playlists'}
+                    Categorize Playlists
                   </button>
                 )}
               </div>
