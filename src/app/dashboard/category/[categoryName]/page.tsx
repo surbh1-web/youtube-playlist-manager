@@ -55,12 +55,16 @@ export default function CategoryPage() {
       try {
         console.log(`=== LOADING CATEGORY: ${categoryName} ===`)
         
-        // Show hidden playlists contents
-        const hiddenPlaylists = getHiddenPlaylists()
-        console.log('Hidden playlists from localStorage:', hiddenPlaylists)
-        
+        // Check localStorage first - if data exists, use it immediately
         const cachedData = localStorage.getItem('playlist-categories')
+        
         if (cachedData) {
+          console.log('Using cached data from localStorage - instant load!')
+          
+          // Show hidden playlists contents
+          const hiddenPlaylists = getHiddenPlaylists()
+          console.log('Hidden playlists from localStorage:', hiddenPlaylists)
+          
           const parsed: CachedData = JSON.parse(cachedData)
           setCategorizedPlaylists(parsed.categorizedPlaylists)
           
@@ -75,9 +79,20 @@ export default function CategoryPage() {
           )
           console.log(`Visible playlist IDs after filtering:`, nonEmptyPlaylists.map(p => p.id))
           setCategoryPlaylists(nonEmptyPlaylists)
+          
+          // Don't make any API calls - we have cached data
+          console.log('Data loaded from cache, skipping API calls')
+          return
         }
+        
+        // Only fetch fresh data if localStorage is empty
+        console.log('No cached data found, fetching fresh data...')
+        
+        // TODO: Add fresh data fetching logic here if needed
+        // For now, just set loading to false
+        
       } catch (error) {
-        console.error('Error loading cached data:', error)
+        console.error('Error loading data:', error)
       } finally {
         setLoading(false)
       }

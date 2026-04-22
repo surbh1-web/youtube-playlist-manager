@@ -153,6 +153,21 @@ export default function PlaylistPage() {
         const title = getPlaylistTitleFromCache(playlistId)
         setPlaylistName(title)
 
+        // Check localStorage cache first
+        const cacheKey = `playlist-videos-${playlistId}`
+        const cachedVideos = localStorage.getItem(cacheKey)
+        
+        if (cachedVideos) {
+          console.log(`Using cached videos for playlist ${playlistId} - instant load!`)
+          const data: VideosResponse = JSON.parse(cachedVideos)
+          setVideos(data.videos || [])
+          setLoading(false)
+          return
+        }
+
+        // Only fetch from YouTube API if no cache exists
+        console.log(`No cached videos found for playlist ${playlistId}, fetching from YouTube API...`)
+
         const response = await fetch(`/api/youtube/playlists/${playlistId}/videos`)
         
         if (!response.ok) {
@@ -162,6 +177,10 @@ export default function PlaylistPage() {
 
         const data: VideosResponse = await response.json()
         setVideos(data.videos || [])
+        
+        // Cache the results in localStorage
+        localStorage.setItem(cacheKey, JSON.stringify(data))
+        console.log(`Cached ${data.videos?.length || 0} videos for playlist ${playlistId}`)
 
       } catch (err) {
         console.error("Error fetching videos:", err)
