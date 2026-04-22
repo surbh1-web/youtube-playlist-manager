@@ -33,7 +33,17 @@ interface CachedData {
 
 export default function Dashboard() {
   const router = useRouter()
-  const [categorizedPlaylists, setCategorizedPlaylists] = useState<Record<string, YouTubePlaylist[]>>({})
+  const [categorizedPlaylists, setCategorizedPlaylists] = useState<Record<string, YouTubePlaylist[]>>(() => {
+  if (typeof window === 'undefined') return {}
+  try {
+    const cached = localStorage.getItem('playlist-categories')
+    if (cached) {
+      const parsed = JSON.parse(cached)
+      return parsed.categorizedPlaylists || {}
+    }
+  } catch (e) {}
+  return {}
+})
   const [loading, setLoading] = useState(true)
   const [recategorizing, setRecategorizing] = useState(false)
   const [showHiddenPlaylists, setShowHiddenPlaylists] = useState(false)
@@ -288,8 +298,13 @@ export default function Dashboard() {
   }
 
   useEffect(() => {
-    fetchPlaylistsAndCategories()
-  }, [])
+  if (Object.keys(categorizedPlaylists).length > 0) {
+    setLoading(false)
+    return // Cache exists - skip all API calls
+  }
+  // Only fetch if no cache
+  fetchPlaylistsAndCategories()
+}, [])
 
   const handleRecategorize = () => {
     localStorage.removeItem('playlist-categories')

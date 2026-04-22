@@ -80,7 +80,18 @@ export default function PlaylistPage() {
   const params = useParams()
   const playlistId = params.playlistId as string
   
-  const [videos, setVideos] = useState<YouTubeVideo[]>([])
+  const [videos, setVideos] = useState<YouTubeVideo[]>(() => {
+  if (typeof window === 'undefined') return []
+  try {
+    const cacheKey = `playlist-videos-${playlistId}`
+    const cachedVideos = localStorage.getItem(cacheKey)
+    if (cachedVideos) {
+      const data: VideosResponse = JSON.parse(cachedVideos)
+      return data.videos || []
+    }
+  } catch (e) {}
+  return []
+})
   const [playlistName, setPlaylistName] = useState<string>("Playlist")
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -146,27 +157,21 @@ export default function PlaylistPage() {
   useEffect(() => {
     const fetchVideos = async () => {
       try {
+        // Check if we already have videos from lazy initial state
+        if (videos.length > 0) {
+          console.log(`Using cached videos from lazy initial state for playlist ${playlistId} - instant load!`)
+          setLoading(false)
+          return // Cache exists - skip all API calls
+        }
+
+        // Only fetch from YouTube API if no cache exists
+        console.log(`No cached videos found for playlist ${playlistId}, fetching from YouTube API...`)
         setLoading(true)
         setError(null)
 
         // Set playlist title from cache
         const title = getPlaylistTitleFromCache(playlistId)
         setPlaylistName(title)
-
-        // Check localStorage cache first
-        const cacheKey = `playlist-videos-${playlistId}`
-        const cachedVideos = localStorage.getItem(cacheKey)
-        
-        if (cachedVideos) {
-          console.log(`Using cached videos for playlist ${playlistId} - instant load!`)
-          const data: VideosResponse = JSON.parse(cachedVideos)
-          setVideos(data.videos || [])
-          setLoading(false)
-          return
-        }
-
-        // Only fetch from YouTube API if no cache exists
-        console.log(`No cached videos found for playlist ${playlistId}, fetching from YouTube API...`)
 
         const response = await fetch(`/api/youtube/playlists/${playlistId}/videos`)
         
@@ -179,6 +184,7 @@ export default function PlaylistPage() {
         setVideos(data.videos || [])
         
         // Cache the results in localStorage
+        const cacheKey = `playlist-videos-${playlistId}`
         localStorage.setItem(cacheKey, JSON.stringify(data))
         console.log(`Cached ${data.videos?.length || 0} videos for playlist ${playlistId}`)
 

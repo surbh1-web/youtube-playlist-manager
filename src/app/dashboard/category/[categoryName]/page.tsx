@@ -41,8 +41,35 @@ export default function CategoryPage() {
   const params = useParams()
   const categoryName = decodeURIComponent(params.categoryName as string)
   
-  const [categorizedPlaylists, setCategorizedPlaylists] = useState<Record<string, YouTubePlaylist[]>>({})
-  const [categoryPlaylists, setCategoryPlaylists] = useState<YouTubePlaylist[]>([])
+  const [categorizedPlaylists, setCategorizedPlaylists] = useState<Record<string, YouTubePlaylist[]>>(() => {
+  if (typeof window === 'undefined') return {}
+  try {
+    const cached = localStorage.getItem('playlist-categories')
+    if (cached) {
+      const parsed = JSON.parse(cached)
+      return parsed.categorizedPlaylists || {}
+    }
+  } catch (e) {}
+  return {}
+})
+
+  const [categoryPlaylists, setCategoryPlaylists] = useState<YouTubePlaylist[]>(() => {
+  if (typeof window === 'undefined') return []
+  try {
+    const cached = localStorage.getItem('playlist-categories')
+    if (cached) {
+      const parsed = JSON.parse(cached)
+      const playlists = parsed.categorizedPlaylists[categoryName] || []
+      // Filter out empty playlists and hidden playlists
+      const nonEmptyPlaylists = playlists.filter((playlist: YouTubePlaylist) => 
+        playlist.contentDetails.itemCount !== 0 && 
+        playlist.contentDetails.itemCount > 0
+      )
+      return nonEmptyPlaylists
+    }
+  } catch (e) {}
+  return []
+})
   const [loading, setLoading] = useState(true)
   const [showMoveDropdown, setShowMoveDropdown] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
@@ -55,34 +82,11 @@ export default function CategoryPage() {
       try {
         console.log(`=== LOADING CATEGORY: ${categoryName} ===`)
         
-        // Check localStorage first - if data exists, use it immediately
-        const cachedData = localStorage.getItem('playlist-categories')
-        
-        if (cachedData) {
-          console.log('Using cached data from localStorage - instant load!')
-          
-          // Show hidden playlists contents
-          const hiddenPlaylists = getHiddenPlaylists()
-          console.log('Hidden playlists from localStorage:', hiddenPlaylists)
-          
-          const parsed: CachedData = JSON.parse(cachedData)
-          setCategorizedPlaylists(parsed.categorizedPlaylists)
-          
-          const playlists = parsed.categorizedPlaylists[categoryName] || []
-          console.log(`All playlist IDs in category "${categoryName}":`, playlists.map(p => p.id))
-          
-          // Filter out empty playlists and hidden playlists
-          const nonEmptyPlaylists = playlists.filter(playlist => 
-            playlist.contentDetails.itemCount !== 0 && 
-            playlist.contentDetails.itemCount > 0 &&
-            !isPlaylistHidden(playlist.id)
-          )
-          console.log(`Visible playlist IDs after filtering:`, nonEmptyPlaylists.map(p => p.id))
-          setCategoryPlaylists(nonEmptyPlaylists)
-          
-          // Don't make any API calls - we have cached data
-          console.log('Data loaded from cache, skipping API calls')
-          return
+        // Check if we already have data from lazy initial state
+        if (Object.keys(categorizedPlaylists).length > 0 && categoryPlaylists.length > 0) {
+          console.log('Using data from lazy initial state - instant load!')
+          setLoading(false)
+          return // Cache exists - skip all API calls
         }
         
         // Only fetch fresh data if localStorage is empty
