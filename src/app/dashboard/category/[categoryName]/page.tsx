@@ -53,18 +53,27 @@ export default function CategoryPage() {
   useEffect(() => {
     const loadData = () => {
       try {
+        console.log(`=== LOADING CATEGORY: ${categoryName} ===`)
+        
+        // Show hidden playlists contents
+        const hiddenPlaylists = getHiddenPlaylists()
+        console.log('Hidden playlists from localStorage:', hiddenPlaylists)
+        
         const cachedData = localStorage.getItem('playlist-categories')
         if (cachedData) {
           const parsed: CachedData = JSON.parse(cachedData)
           setCategorizedPlaylists(parsed.categorizedPlaylists)
           
           const playlists = parsed.categorizedPlaylists[categoryName] || []
+          console.log(`All playlist IDs in category "${categoryName}":`, playlists.map(p => p.id))
+          
           // Filter out empty playlists and hidden playlists
           const nonEmptyPlaylists = playlists.filter(playlist => 
             playlist.contentDetails.itemCount !== 0 && 
             playlist.contentDetails.itemCount > 0 &&
             !isPlaylistHidden(playlist.id)
           )
+          console.log(`Visible playlist IDs after filtering:`, nonEmptyPlaylists.map(p => p.id))
           setCategoryPlaylists(nonEmptyPlaylists)
         }
       } catch (error) {
@@ -94,7 +103,15 @@ export default function CategoryPage() {
       // Find the playlist
       const playlist = categoryPlaylists.find(p => p.id === playlistId)
       if (!playlist) return
-
+      
+      // Add detailed logging
+      console.log('=== MOVE PLAYLIST DEBUG ===')
+      console.log('Playlist ID:', playlistId)
+      console.log('Playlist Name:', playlist.snippet.title)
+      console.log('Current Category (from URL):', categoryName)
+      console.log('Target Category (user selected):', newCategory)
+      console.log('========================')
+      
       // Call lock API
       const response = await fetch('/api/lock-playlist', {
         method: 'POST',
@@ -109,35 +126,79 @@ export default function CategoryPage() {
       })
 
       if (response.ok) {
-        // Wait for confirmation before updating localStorage
-        setLockConfirmation(`Playlist moved and locked — won't be auto-moved`)
+        const result = await response.json()
+        console.log('API response:', result)
         
-        // Update state and localStorage after confirmation
-        setTimeout(() => {
-          const updatedCategorized = { ...categorizedPlaylists }
+        // Only update localStorage after API confirms success
+        const cachedData = localStorage.getItem('playlist-categories')
+        if (cachedData) {
+          console.log('=== SAFE LOCALSTORAGE UPDATE ===')
           
-          // Find and remove playlist from current category
-          updatedCategorized[categoryName] = updatedCategorized[categoryName]?.filter(p => p.id !== playlistId) || []
+          // Step 1: Read full categories from localStorage
+          const parsed = JSON.parse(cachedData)
+          const updatedCategorized = { ...parsed.categorizedPlaylists }
           
-          // Add to new category
+          console.log('Original categories:', Object.keys(updatedCategorized))
+          console.log('Current category playlists count:', updatedCategorized[categoryName]?.length || 0)
+          console.log('Target category playlists count:', updatedCategorized[newCategory]?.length || 0)
+          
+          // Step 2: Add playlist to target category array first
           if (!updatedCategorized[newCategory]) {
             updatedCategorized[newCategory] = []
           }
           updatedCategorized[newCategory].push(playlist)
           
-          // Update state and localStorage
-          setCategorizedPlaylists(updatedCategorized)
-          setCategoryPlaylists(updatedCategorized[categoryName] || [])
+          console.log('Step 2: Added to target category. New count:', updatedCategorized[newCategory].length)
           
-          const cacheData: CachedData = {
+          // Step 3: Save to localStorage
+          const cacheData1: CachedData = {
             categorizedPlaylists: updatedCategorized,
             lastUpdated: new Date().toISOString()
           }
-          localStorage.setItem('playlist-categories', JSON.stringify(cacheData))
+          localStorage.setItem('playlist-categories', JSON.stringify(cacheData1))
+          console.log('Step 3: Saved to localStorage after adding to target')
+          
+          // Step 4: Only then remove from current category array
+          updatedCategorized[categoryName] = updatedCategorized[categoryName]?.filter((p: YouTubePlaylist) => p.id !== playlistId) || []
+          
+          console.log('Step 4: Removed from current category. New count:', updatedCategorized[categoryName].length)
+          
+          // Step 5: Save to localStorage again
+          const cacheData2: CachedData = {
+            categorizedPlaylists: updatedCategorized,
+            lastUpdated: new Date().toISOString()
+          }
+          localStorage.setItem('playlist-categories', JSON.stringify(cacheData2))
+          console.log('Step 5: Saved to localStorage after removing from current')
+          
+          console.log('Final categories:', Object.keys(updatedCategorized))
+          console.log('Final target category playlists:', updatedCategorized[newCategory]?.map((p: YouTubePlaylist) => p.snippet.title))
+          console.log('Final current category playlists:', updatedCategorized[categoryName]?.map((p: YouTubePlaylist) => p.snippet.title))
+          console.log('==============================')
+          
+          // Step 6: Update the displayed playlists state on screen
+          setCategorizedPlaylists(updatedCategorized)
+          // Update the current category's playlists to reflect the removal
+          const updatedCurrentCategoryPlaylists = updatedCategorized[categoryName] || []
+          setCategoryPlaylists(updatedCurrentCategoryPlaylists)
+          
+          console.log(`UI State Updated: Current category "${categoryName}" now has ${updatedCurrentCategoryPlaylists.length} playlists`)
+          console.log('Updated current category playlists:', updatedCurrentCategoryPlaylists.map((p: YouTubePlaylist) => p.snippet.title))
+          
+          console.log(`Successfully moved playlist "${playlist.snippet.title}" from "${categoryName}" to "${newCategory}"`)
+        }
+        
+        // Show success message
+        setLockConfirmation(result.message || 'Playlist moved and locked')
+        
+        // Clear confirmation after 3 seconds
+        setTimeout(() => {
           setLockConfirmation(null)
-        }, 2000)
+        }, 3000)
       } else {
-        setLockConfirmation('Failed to lock playlist')
+        const errorData = await response.json()
+        console.error('API error:', errorData)
+        setLockConfirmation(errorData.error || 'Failed to lock playlist')
         setTimeout(() => setLockConfirmation(null), 3000)
       }
     } catch (error) {
@@ -150,7 +211,9 @@ export default function CategoryPage() {
   const getHiddenPlaylists = (): string[] => {
     try {
       const hidden = localStorage.getItem('hidden-playlists')
-      return hidden ? JSON.parse(hidden) : []
+      const hiddenPlaylists = hidden ? JSON.parse(hidden) : []
+      console.log('getHiddenPlaylists called, returning:', hiddenPlaylists)
+      return hiddenPlaylists
     } catch (error) {
       console.warn('Error reading hidden playlists:', error)
       return []
@@ -158,6 +221,11 @@ export default function CategoryPage() {
   }
 
   const hidePlaylist = (playlistId: string) => {
+    console.log(`=== HIDE PLAYLIST CALLED ===`)
+    console.log('Hiding playlist ID:', playlistId)
+    console.log('Call stack:', new Error().stack)
+    console.log('========================')
+    
     try {
       const hidden = getHiddenPlaylists()
       hidden.push(playlistId)
@@ -178,7 +246,10 @@ export default function CategoryPage() {
   }
 
   const isPlaylistHidden = (playlistId: string): boolean => {
-    return getHiddenPlaylists().includes(playlistId)
+    const hiddenPlaylists = getHiddenPlaylists()
+    const isHidden = hiddenPlaylists.includes(playlistId)
+    console.log(`isPlaylistHidden: Checking playlist "${playlistId}" - Hidden: ${isHidden}`)
+    return isHidden
   }
 
   const handlePlaylistClick = (playlistId: string) => {

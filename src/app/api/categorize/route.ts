@@ -275,12 +275,82 @@ export async function POST(request: NextRequest) {
         }
         
       } catch (error) {
-        console.error(`❌ Batch ${batchIndex + 1} failed:`, error)
-        // Continue with next batch even if one fails
       }
     }
 
-    console.log(`🎉 All batches complete! Categorized ${Object.keys(allCategorizedPlaylists).length} playlists`)
+    console.log(`All batches complete! Categorized ${Object.keys(allCategorizedPlaylists).length} playlists`)
+
+    // Check for missing playlists
+    const inputPlaylistIds = playlists.map(p => p.id)
+    const categorizedPlaylistIds = Object.keys(allCategorizedPlaylists)
+    const missingPlaylistIds = inputPlaylistIds.filter(id => !categorizedPlaylistIds.includes(id))
+    
+    if (missingPlaylistIds.length > 0) {
+      console.log(`=== MISSING PLAYLISTS FOUND: ${missingPlaylistIds.length} ===`)
+      const missingPlaylists = playlists.filter(p => missingPlaylistIds.includes(p.id))
+      console.log("Missing playlists found:", missingPlaylists.map(p => `${p.id}: "${p.title}"`))
+      
+      // Re-process missing playlists in a separate batch
+      console.log("=== RETRYING MISSING PLAYLISTS ===")
+      try {
+        const missingPlaylistsWithContext = playlistsWithContext.filter(p => missingPlaylistIds.includes(p.id))
+        const retryResults = await categorizeBatch(missingPlaylistsWithContext, 999, 999) // Use special batch number
+        
+        // Add retry results to main results
+        Object.assign(allCategorizedPlaylists, retryResults)
+        
+        // Check if any are still missing after retry
+        const stillMissingIds = missingPlaylistIds.filter(id => !Object.keys(retryResults).includes(id))
+        
+        if (stillMissingIds.length > 0) {
+          console.log(`=== STILL MISSING AFTER RETRY: ${stillMissingIds.length} ===`)
+          const stillMissingPlaylists = playlists.filter(p => stillMissingIds.includes(p.id))
+          console.log("Still missing playlists:", stillMissingPlaylists.map(p => `${p.id}: "${p.title}"`))
+          
+          // Use fallback: assign to category with most keyword overlap
+          console.log("=== USING FALLBACK CATEGORIZATION ===")
+          const categories = ["Food & Cooking", "Fashion & Beauty", "Fitness & Health", "Kids Education", "Technology & Learning", "Dance", "Music", "Travel", "Entertainment"]
+          
+          for (const playlist of stillMissingPlaylists) {
+            let bestCategory = "Entertainment" // default fallback
+            let bestScore = 0
+            
+            for (const category of categories) {
+              const categoryKeywords = category.toLowerCase().split(/\s+(?:&|and)\s+/)
+              const playlistTitle = playlist.title.toLowerCase()
+              
+              let score = 0
+              for (const keyword of categoryKeywords) {
+                if (playlistTitle.includes(keyword)) {
+                  score += 1
+                }
+              }
+              
+              if (score > bestScore) {
+                bestScore = score
+                bestCategory = category
+              }
+            }
+            
+            allCategorizedPlaylists[playlist.id] = bestCategory
+            console.log(`Fallback: Assigned "${playlist.title}" to "${bestCategory}" (score: ${bestScore})`)
+          }
+        } else {
+          console.log("All missing playlists successfully categorized on retry!")
+        }
+      } catch (retryError) {
+        console.error("Retry failed for missing playlists:", retryError)
+        
+        // Ultimate fallback - assign all missing to "Entertainment"
+        const stillMissingPlaylists = playlists.filter(p => missingPlaylistIds.includes(p.id) && !allCategorizedPlaylists[p.id])
+        for (const playlist of stillMissingPlaylists) {
+          allCategorizedPlaylists[playlist.id] = "Entertainment"
+          console.log(`Ultimate fallback: Assigned "${playlist.title}" to Entertainment`)
+        }
+      }
+    }
+
+    console.log(`Final result: ${Object.keys(allCategorizedPlaylists).length}/${playlists.length} playlists categorized`)
 
     // Log final category distribution
     const categoryCount: Record<string, number> = {}
