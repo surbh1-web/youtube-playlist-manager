@@ -2,6 +2,10 @@
 
 import { useState, useEffect, useMemo } from "react"
 import { useRouter } from "next/navigation"
+import { useSession, signOut } from "next-auth/react"
+
+// Disable static generation to allow useSession
+export const dynamic = 'force-dynamic'
 
 interface YouTubePlaylist {
   id: string
@@ -32,7 +36,16 @@ interface CachedData {
 }
 
 export default function Dashboard() {
+  const sessionData = useSession()
   const router = useRouter()
+  
+  // Check for token refresh errors and redirect to sign in if refresh fails
+  useEffect(() => {
+    if (sessionData.status === 'authenticated' && sessionData.data?.error === 'RefreshAccessTokenError') {
+      console.error('Token refresh failed, signing out user')
+      signOut({ callbackUrl: '/auth/signin' })
+    }
+  }, [sessionData])
   const [categorizedPlaylists, setCategorizedPlaylists] = useState<Record<string, YouTubePlaylist[]>>(() => {
   if (typeof window === 'undefined') return {}
   try {

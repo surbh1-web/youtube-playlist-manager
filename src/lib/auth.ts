@@ -8,9 +8,8 @@ export const authOptions = {
       clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
       authorization: {
         params: {
-          prompt: "consent",
           access_type: "offline",
-          response_type: "code",
+          prompt: "consent",
           scope: "openid email profile https://www.googleapis.com/auth/youtube.readonly"
         }
       }
@@ -18,17 +17,54 @@ export const authOptions = {
   ],
   callbacks: {
     async jwt({ token, account }: any) {
+      // Initial sign in - save tokens
       if (account) {
-        token.accessToken = account.access_token
-        token.refreshToken = account.refresh_token
-        token.expiresAt = Date.now() + ((account.expires_in || 3600) * 1000)
+        return {
+          ...token,
+          accessToken: account.access_token,
+          refreshToken: account.refresh_token,
+          accessTokenExpires: account.expires_at ? account.expires_at * 1000 : Date.now() + 3600000
+        }
       }
-      return token
+      
+      // Return token if not expired
+      if (Date.now() < (token.accessTokenExpires as number)) {
+        return token
+      }
+      
+      // Token expired - refresh it
+      try {
+        const response = await fetch('https://oauth2.googleapis.com/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            client_id: process.env.GOOGLE_CLIENT_ID!,
+            client_secret: process.env.GOOGLE_CLIENT_SECRET!,
+            grant_type: 'refresh_token',
+            refresh_token: token.refreshToken as string
+          })
+        })
+        
+        const refreshedTokens = await response.json()
+        
+        if (!response.ok) {
+          throw refreshedTokens
+        }
+        
+        return {
+          ...token,
+          accessToken: refreshedTokens.access_token,
+          accessTokenExpires: Date.now() + refreshedTokens.expires_in * 1000,
+          refreshToken: refreshedTokens.refresh_token ?? token.refreshToken
+        }
+      } catch (error) {
+        console.error('Error refreshing access token:', error)
+        return { ...token, error: 'RefreshAccessTokenError' }
+      }
     },
     async session({ session, token }: any) {
       session.accessToken = token.accessToken as string
-      session.refreshToken = token.refreshToken as string
-      session.expiresAt = token.expiresAt as number
+      session.error = token.error as string
       return session
     }
   },
