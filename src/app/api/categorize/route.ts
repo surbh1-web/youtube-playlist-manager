@@ -38,12 +38,12 @@ async function categorizeBatch(
 
   const systemPrompt = `You are a playlist categorizer. Given a playlist name and sample video titles, assign it to ONE of these categories: Food & Cooking, Fashion & Beauty, Fitness & Health, Kids Education, Technology & Learning, Dance, Music, Travel, Entertainment. You MUST pick one of these 10 categories. Never use General or Other. If unsure, pick the closest match based on video titles.
 
-For each playlist, return only the category name.
+For each playlist, return the category name and also suggest a single relevant emoji for this category.
 
-Here are the playlists to categorize:
+Here are playlists to categorize:
 ${playlistData}
 
-Return JSON format: {"playlist_id": "category"}`
+Return JSON format: {"playlist_id": {"category": "category_name", "emoji": "emoji"}}`
 
   console.log(`Sending ${batch.length} playlists to OpenAI`)
   console.log("Playlist data length:", playlistData.length)
@@ -91,6 +91,7 @@ Return JSON format: {"playlist_id": "category"}`
 
     // Parse the JSON response
     let categorizedPlaylists: Record<string, string>
+    let categoryEmojis: Record<string, string> = {}
     
     console.log("=== JSON PARSING START ===")
     
@@ -116,11 +117,43 @@ Return JSON format: {"playlist_id": "category"}`
       console.log("Final clean response (first 200 chars):", cleanResponse.substring(0, 200))
       console.log("Final clean response (last 200 chars):", cleanResponse.length > 200 ? cleanResponse.substring(cleanResponse.length - 200) : cleanResponse)
       
-      categorizedPlaylists = JSON.parse(cleanResponse)
+      const parsedResponse = JSON.parse(cleanResponse)
+      
+      // Extract categories and emojis from the new response format
+      categorizedPlaylists = {}
+      categoryEmojis = {}
+      
+      for (const [playlistId, categoryData] of Object.entries(parsedResponse)) {
+        if (typeof categoryData === 'string') {
+          // Legacy format: just category name
+          categorizedPlaylists[playlistId] = categoryData
+        } else if (categoryData && typeof categoryData === 'object' && 'category' in categoryData) {
+          // New format: {category: "name", emoji: "emoji"}
+          const data = categoryData as { category: string; emoji?: string }
+          categorizedPlaylists[playlistId] = data.category
+          if (data.emoji) {
+            categoryEmojis[playlistId] = data.emoji
+          }
+        }
+      }
+      
       console.log("=== JSON PARSING SUCCESS ===")
       console.log("Parsed playlists count:", Object.keys(categorizedPlaylists).length)
       console.log("Parsed playlist IDs:", Object.keys(categorizedPlaylists))
       console.log("Parsed categories:", Object.values(categorizedPlaylists))
+      console.log("Parsed emojis:", Object.values(categoryEmojis))
+      
+      // Store emojis in localStorage for dynamic categories
+      if (Object.keys(categoryEmojis).length > 0) {
+        try {
+          const existingEmojis = localStorage.getItem('category-emojis')
+          const allEmojis = existingEmojis ? { ...JSON.parse(existingEmojis), ...categoryEmojis } : categoryEmojis
+          localStorage.setItem('category-emojis', JSON.stringify(allEmojis))
+          console.log("Stored category emojis in localStorage:", Object.keys(categoryEmojis).length)
+        } catch (e) {
+          console.error("Failed to store category emojis in localStorage:", e)
+        }
+      }
       
     } catch (parseError: any) {
       console.error("=== JSON PARSING FAILED ===")

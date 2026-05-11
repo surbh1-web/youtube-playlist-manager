@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { useRouter, useParams } from "next/navigation"
+import { useSession, signOut } from "next-auth/react"
 
 interface YouTubeVideo {
   id: string
@@ -75,7 +76,26 @@ interface VideosResponse {
   nextPageToken?: string
 }
 
+const handleSignOut = async () => {
+  if (typeof window !== 'undefined') {
+    // Only clear playlist cache — do not clear everything
+    // This prevents other users seeing this user's data
+    // but preserves cache if same user signs back in
+    localStorage.removeItem('playlist-categories')
+    localStorage.removeItem('video-search-index')
+    localStorage.removeItem('category-emojis')
+    // Remove all playlist video caches
+    Object.keys(localStorage).forEach(key => {
+      if (key.startsWith('playlist-videos-')) {
+        localStorage.removeItem(key)
+      }
+    })
+  }
+  await signOut({ callbackUrl: '/' })
+}
+
 export default function PlaylistPage() {
+  const { data: session } = useSession()
   const router = useRouter()
   const params = useParams()
   const playlistId = params.playlistId as string
@@ -269,9 +289,16 @@ export default function PlaylistPage() {
           
           <button
             onClick={() => router.push('/dashboard')}
-            className="text-slate-300 hover:text-white transition-colors"
+            className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg transition-colors"
           >
-            Home
+            ← Back
+          </button>
+          
+          <button
+            onClick={handleSignOut}
+            className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg transition-colors"
+          >
+            Sign Out
           </button>
         </div>
 

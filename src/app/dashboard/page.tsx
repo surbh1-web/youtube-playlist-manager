@@ -33,6 +33,52 @@ interface ExtendedPlaylist extends YouTubePlaylist {
 interface CachedData {
   categorizedPlaylists: Record<string, YouTubePlaylist[]>
   lastUpdated: string
+  userEmail?: string
+}
+
+const CATEGORY_CONFIG: Record<string, { emoji: string; gradient: string; border: string }> = {
+  'Food & Cooking': { emoji: '🍛', gradient: 'linear-gradient(135deg, #1a3a2a 0%, #0d2b1e 100%)', border: '#2d6a4f40' },
+  'Fashion & Beauty': { emoji: '👗', gradient: 'linear-gradient(135deg, #3a1a3a 0%, #2b0d2b 100%)', border: '#9b2c9b40' },
+  'Fitness & Health': { emoji: '💪', gradient: 'linear-gradient(135deg, #1a2a3a 0%, #0d1e2b 100%)', border: '#2c6a9b40' },
+  'Dance': { emoji: '💃', gradient: 'linear-gradient(135deg, #3a2a1a 0%, #2b1e0d 100%)', border: '#9b6a2c40' },
+  'Technology & Learning': { emoji: '💻', gradient: 'linear-gradient(135deg, #1a1a3a 0%, #0d0d2b 100%)', border: '#2c2c9b40' },
+  'Kids Education': { emoji: '🎒', gradient: 'linear-gradient(135deg, #3a3a1a 0%, #2b2b0d 100%)', border: '#9b9b2c40' },
+  'Travel': { emoji: '✈️', gradient: 'linear-gradient(135deg, #1a3a3a 0%, #0d2b2b 100%)', border: '#2c9b9b40' },
+  'Music': { emoji: '🎵', gradient: 'linear-gradient(135deg, #3a1a2a 0%, #2b0d1e 100%)', border: '#9b2c6a40' },
+  'Entertainment': { emoji: '🎬', gradient: 'linear-gradient(135deg, #3a1a1a 0%, #2b0d0d 100%)', border: '#9b2c2c40' },
+  'Motivation & Self Improvement': { emoji: '🌟', gradient: 'linear-gradient(135deg, #3a2a1a 0%, #2b1e0d 100%)', border: '#9b7a2c40' },
+}
+
+const FALLBACK_COLORS = [
+  { gradient: 'linear-gradient(135deg, #1a2a3a 0%, #0d1e2b 100%)', border: '#2c5a7a40' },
+  { gradient: 'linear-gradient(135deg, #2a1a3a 0%, #1e0d2b 100%)', border: '#5a2c7a40' },
+  { gradient: 'linear-gradient(135deg, #3a1a2a 0%, #2b0d1e 100%)', border: '#7a2c5a40' },
+  { gradient: 'linear-gradient(135deg, #1a3a2a 0%, #0d2b1e 100%)', border: '#2c7a5a40' },
+  { gradient: 'linear-gradient(135deg, #3a3a1a 0%, #2b2b0d 100%)', border: '#7a7a2c40' },
+  { gradient: 'linear-gradient(135deg, #1a1a3a 0%, #0d0d2b 100%)', border: '#2c2c7a40' },
+]
+
+const getCategoryConfig = (categoryName: string, index: number) => {
+  if (CATEGORY_CONFIG[categoryName]) return { ...CATEGORY_CONFIG[categoryName] }
+  
+  // Check localStorage for dynamic category emojis
+  try {
+    const categoryEmojis = localStorage.getItem('category-emojis')
+    if (categoryEmojis) {
+      const emojis: Record<string, string> = JSON.parse(categoryEmojis)
+      if (emojis[categoryName]) {
+        const fallback = FALLBACK_COLORS[index % FALLBACK_COLORS.length]
+        return { emoji: emojis[categoryName], ...fallback }
+      }
+    }
+  } catch (e) {}
+  
+  const fallback = FALLBACK_COLORS[index % FALLBACK_COLORS.length]
+  return { emoji: '📁', ...fallback }
+}
+
+const handleSignOut = async () => {
+  await signOut({ callbackUrl: '/' })
 }
 
 export default function Dashboard() {
@@ -169,6 +215,7 @@ export default function Dashboard() {
             }
           })
           
+          console.log("Saving to cache")
           localStorage.setItem('playlist-categories', JSON.stringify(parsed))
           setCategorizedPlaylists(parsed.categorizedPlaylists)
           setCacheAge('Just now')
@@ -275,8 +322,10 @@ export default function Dashboard() {
         // Store in localStorage
         const cacheData: CachedData = {
           categorizedPlaylists: grouped,
-          lastUpdated: new Date().toISOString()
+          lastUpdated: new Date().toISOString(),
+          userEmail: sessionData.data?.user?.email || undefined
         }
+        console.log("Saving to cache")
         localStorage.setItem('playlist-categories', JSON.stringify(cacheData))
 
       } catch (fetchError: any) {
@@ -311,13 +360,26 @@ export default function Dashboard() {
   }
 
   useEffect(() => {
+  // If cache exists, check if it belongs to current user
   if (Object.keys(categorizedPlaylists).length > 0) {
+    const cached = localStorage.getItem('playlist-categories')
+    if (cached) {
+      const parsed = JSON.parse(cached)
+      // If different user, clear and refetch
+      if (parsed.userEmail && sessionData.data?.user?.email && parsed.userEmail !== sessionData.data.user.email) {
+        localStorage.removeItem('playlist-categories')
+        fetchPlaylistsAndCategories(false)
+        return
+      }
+      console.log("Cache loaded successfully")
+    }
+    // Same user — use cache instantly
     setLoading(false)
-    return // Cache exists - skip all API calls
+    return
   }
-  // Only fetch if no cache
+  // No cache — fetch fresh
   fetchPlaylistsAndCategories()
-}, [])
+}, [sessionData.data?.user?.email])
 
   const handleRecategorize = () => {
     localStorage.removeItem('playlist-categories')
@@ -585,89 +647,73 @@ export default function Dashboard() {
             >
               Manage Hidden Playlists ({getHiddenPlaylists().length})
             </button>
+            <button
+              onClick={handleSignOut}
+              className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-sm transition-colors"
+            >
+              Sign Out
+            </button>
           </div>
         </div>
 
-        {/* Filter Bar */}
-        <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-4 mb-6 border border-slate-700">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            {/* Mode Toggle Buttons */}
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">Mode</label>
-              <div className="flex gap-2">
-                {['Categories', 'Playlists', 'Videos'].map((mode) => (
-                  <button
-                    key={mode}
-                    onClick={() => handleModeChange(mode)}
-                    className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                      activeMode === mode
-                        ? 'bg-white text-slate-900'
-                        : 'bg-transparent text-slate-400 hover:text-white border border-slate-600'
-                    }`}
-                  >
-                    {mode}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Search Box */}
-            <div className="relative">
-              <label className="block text-sm font-medium text-slate-300 mb-2">Search</label>
-              <input
-                type="text"
-                value={searchTerm}
-                onChange={(e) => handleSearchChange(e.target.value)}
-                placeholder={
-                  activeMode === 'Categories' ? 'Search categories...' :
-                  activeMode === 'Playlists' ? 'Search playlists...' :
-                  'Search video titles...'
-                }
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent pr-8"
-              />
-              {searchTerm && (
-                <button
-                  onClick={clearSearch}
-                  className="absolute right-2 top-8 text-slate-400 hover:text-white transition-colors"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              )}
-            </div>
-
-            {/* Sort Dropdown */}
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">Sort</label>
-              <select
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+        {/* Search and Controls */}
+        <div className="flex flex-col lg:flex-row gap-4 mb-8">
+          {/* Search Box */}
+          <div className="relative flex-1">
+            <label className="block text-sm font-medium text-slate-300 mb-2">Search</label>
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => handleSearchChange(e.target.value)}
+              placeholder={
+                activeMode === 'Categories' ? 'Search categories...' :
+                activeMode === 'Playlists' ? 'Search playlists...' :
+                'Search video titles...'
+              }
+              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent pr-8"
+            />
+            {searchTerm && (
+              <button
+                onClick={clearSearch}
+                className="absolute right-2 top-8 text-slate-400 hover:text-white transition-colors"
               >
-                <option value="name-az">Name A-Z</option>
-                <option value="name-za">Name Z-A</option>
-                <option value="most-playlists">Most Playlists</option>
-                <option value="fewest-playlists">Fewest Playlists</option>
-              </select>
-            </div>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+          </div>
 
-            {/* Results Count */}
-            <div className="flex items-end">
-              <span className="text-sm text-slate-300">
-                {activeMode === 'Playlists' && searchTerm.trim() !== ''
-                  ? `Showing ${searchPlaylists().length} results`
-                  : activeMode === 'Videos' && searchTerm.trim() !== ''
-                  ? `Showing ${searchVideos().length} results`
-                  : `Showing ${Object.keys(filteredAndSortedCategories).length} of ${Object.keys(categorizedPlaylists).length} categories`
-                }
+          {/* Sort Dropdown */}
+          <div className="w-full lg:w-48">
+            <label className="block text-sm font-medium text-slate-300 mb-2">Sort</label>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            >
+              <option value="name-az">Name A-Z</option>
+              <option value="name-za">Name Z-A</option>
+              <option value="most-playlists">Most Playlists</option>
+              <option value="fewest-playlists">Fewest Playlists</option>
+            </select>
+          </div>
+
+          {/* Results Count */}
+          <div className="flex items-end">
+            <span className="text-sm text-slate-300">
+              {activeMode === 'Playlists' && searchTerm.trim() !== ''
+                ? `Showing ${searchPlaylists().length} results`
+                : activeMode === 'Videos' && searchTerm.trim() !== ''
+                ? `Showing ${searchVideos().length} results`
+                : `Showing ${Object.keys(filteredAndSortedCategories).length} of ${Object.keys(categorizedPlaylists).length} categories`
+              }
+            </span>
+            {cacheAge && activeMode === 'Categories' && (
+              <span className="text-xs text-slate-500 ml-2">
+                Last updated: {cacheAge}
               </span>
-              {cacheAge && activeMode === 'Categories' && (
-                <span className="text-xs text-slate-500 ml-2">
-                  Last updated: {cacheAge}
-                </span>
-              )}
-            </div>
+            )}
           </div>
         </div>
 
@@ -807,51 +853,46 @@ export default function Dashboard() {
           // Categories Grid (normal view)
           Object.keys(filteredAndSortedCategories).length > 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-              {Object.entries(filteredAndSortedCategories).map(([categoryName, categoryPlaylists]) => (
-                <div
-                  key={categoryName}
-                  onClick={() => handleCategoryClick(categoryName)}
-                  className="bg-slate-800/50 backdrop-blur-sm rounded-xl overflow-hidden border border-slate-700 hover:border-slate-600 transition-all cursor-pointer group hover:scale-105"
-                >
-                  {/* Thumbnail Grid */}
-                  <div className="aspect-video bg-slate-700 p-2">
-                    <div className="grid grid-cols-2 gap-1 h-full">
-                      {categoryPlaylists.slice(0, 4).map((playlist, index) => (
-                        <div key={`${categoryName}-${playlist.id}-${index}`} className="relative overflow-hidden rounded">
-                          <img
-                            src={getThumbnailUrl(playlist)}
-                            alt={playlist.snippet.title}
-                            className="w-full h-full object-cover"
-                            onError={(e) => {
-                              e.currentTarget.src = "/placeholder-playlist.jpg"
-                            }}
-                          />
-                        </div>
-                      ))}
-                      {categoryPlaylists.length < 4 && (
-                        Array.from({ length: 4 - categoryPlaylists.length }).map((_, index) => (
-                          <div key={`empty-${index}`} className="bg-slate-600 rounded"></div>
-                        ))
-                      )}
+              {Object.keys(filteredAndSortedCategories).map((categoryName, index) => {
+                const config = getCategoryConfig(categoryName, index)
+                const playlists = categorizedPlaylists[categoryName] || []
+                return (
+                  <div
+                    key={categoryName}
+                    onClick={() => router.push(`/dashboard/category/${encodeURIComponent(categoryName)}`)}
+                    style={{
+                      background: config.gradient,
+                      border: `1px solid ${config.border}`,
+                      borderRadius: '16px',
+                      padding: '28px 20px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '14px',
+                      cursor: 'pointer',
+                      minHeight: '160px',
+                      transition: 'transform 0.2s, box-shadow 0.2s',
+                    }}
+                    onMouseEnter={e => {
+                      e.currentTarget.style.transform = 'translateY(-4px)'
+                      e.currentTarget.style.boxShadow = '0 20px 40px rgba(0,0,0,0.4)'
+                    }}
+                    onMouseLeave={e => {
+                      e.currentTarget.style.transform = 'translateY(0)'
+                      e.currentTarget.style.boxShadow = 'none'
+                    }}
+                  >
+                    <div style={{ fontSize: '44px' }}>{config.emoji}</div>
+                    <div style={{ fontSize: '15px', fontWeight: 700, textAlign: 'center', color: 'white', letterSpacing: '0.3px' }}>
+                      {categoryName}
+                    </div>
+                    <div style={{ fontSize: '12px', opacity: 0.75, background: 'rgba(255,255,255,0.15)', padding: '3px 10px', borderRadius: '20px', color: 'white' }}>
+                      {playlists.length} {playlists.length === 1 ? 'playlist' : 'playlists'}
                     </div>
                   </div>
-                  
-                  {/* Category Info */}
-                  <div className="p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <h3 className="font-semibold text-white group-hover:text-blue-400 transition-colors">
-                        {categoryName}
-                      </h3>
-                      <span className="bg-slate-700 text-slate-300 text-xs px-2 py-1 rounded-full">
-                        {categoryPlaylists.length}
-                      </span>
-                    </div>
-                    <p className="text-slate-400 text-sm">
-                      {categoryPlaylists.length === 1 ? '1 playlist' : `${categoryPlaylists.length} playlists`}
-                    </p>
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           ) : (
             <div className="text-center py-12">

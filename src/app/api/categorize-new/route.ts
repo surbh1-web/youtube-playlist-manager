@@ -83,7 +83,7 @@ export async function POST(request: NextRequest) {
               messages: [
                 {
                   role: 'system',
-                  content: `You are a playlist categorizer. Given playlist information, assign it to ONE category.
+                  content: `You are a playlist categorizer. Given playlist information, assign it to ONE category and suggest a single relevant emoji for this category.
 
 Existing categories: [${existingCategories.join(', ')}]
 
@@ -98,7 +98,7 @@ Playlist name: ${sanitizedPlaylist.name}
 Description: ${sanitizedPlaylist.description}
 Sample video titles: [${sanitizedPlaylist.videoTitles.join(', ')}]
 
-Respond with JSON only: {"category": "category name", "isNew": true/false}`
+Respond with JSON only: {"category": "category name", "isNew": true/false, "emoji": "emoji"}`
                 }
               ],
               max_tokens: 100,
@@ -117,6 +117,18 @@ Respond with JSON only: {"category": "category name", "isNew": true/false}`
                 category: aiResult.category,
                 isNew: aiResult.isNew || false
               })
+              
+              // Store emoji in localStorage if provided
+              if (aiResult.emoji) {
+                try {
+                  const existingEmojis = localStorage.getItem('category-emojis')
+                  const allEmojis = existingEmojis ? { ...JSON.parse(existingEmojis), [aiResult.category]: aiResult.emoji } : { [aiResult.category]: aiResult.emoji }
+                  localStorage.setItem('category-emojis', JSON.stringify(allEmojis))
+                  console.log(`Stored emoji "${aiResult.emoji}" for category "${aiResult.category}"`)
+                } catch (e) {
+                  console.error("Failed to store category emoji in localStorage:", e)
+                }
+              }
             }
           }
         } catch (error) {

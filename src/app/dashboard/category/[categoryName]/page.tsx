@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { useRouter, useParams } from "next/navigation"
+import { useSession, signOut } from "next-auth/react"
 
 interface YouTubePlaylist {
   id: string
@@ -36,7 +37,26 @@ interface CachedData {
   lastUpdated: string
 }
 
+const handleSignOut = async () => {
+  if (typeof window !== 'undefined') {
+    // Only clear playlist cache — do not clear everything
+    // This prevents other users seeing this user's data
+    // but preserves cache if same user signs back in
+    localStorage.removeItem('playlist-categories')
+    localStorage.removeItem('video-search-index')
+    localStorage.removeItem('category-emojis')
+    // Remove all playlist video caches
+    Object.keys(localStorage).forEach(key => {
+      if (key.startsWith('playlist-videos-')) {
+        localStorage.removeItem(key)
+      }
+    })
+  }
+  await signOut({ callbackUrl: '/' })
+}
+
 export default function CategoryPage() {
+  const { data: session } = useSession()
   const router = useRouter()
   const params = useParams()
   const categoryName = decodeURIComponent(params.categoryName as string)
@@ -117,115 +137,73 @@ export default function CategoryPage() {
            "/placeholder-playlist.jpg"
   }
 
-  const movePlaylistToCategory = async (playlistId: string, newCategory: string) => {
-    try {
-      // Find the playlist
-      const playlist = categoryPlaylists.find(p => p.id === playlistId)
-      if (!playlist) return
-      
-      // Add detailed logging
-      console.log('=== MOVE PLAYLIST DEBUG ===')
-      console.log('Playlist ID:', playlistId)
-      console.log('Playlist Name:', playlist.snippet.title)
-      console.log('Current Category (from URL):', categoryName)
-      console.log('Target Category (user selected):', newCategory)
-      console.log('========================')
-      
-      // Call lock API
-      const response = await fetch('/api/lock-playlist', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          playlistId: playlistId,
-          playlistName: playlist.snippet.title,
-          targetCategory: newCategory
-        })
-      })
+  const movePlaylistToCategory = async (playlistId: string, targetCategory: string) => {
+  try {
+    // Step 1: Get current localStorage data
+    const cached = localStorage.getItem('playlist-categories')
+    if (!cached) {
+      alert('Cache not found. Please refresh the page.')
+      return
+    }
+    const data = JSON.parse(cached)
+    const categories = { ...data.categorizedPlaylists }
 
-      if (response.ok) {
-        const result = await response.json()
-        console.log('API response:', result)
-        
-        // Only update localStorage after API confirms success
-        const cachedData = localStorage.getItem('playlist-categories')
-        if (cachedData) {
-          console.log('=== SAFE LOCALSTORAGE UPDATE ===')
-          
-          // Step 1: Read full categories from localStorage
-          const parsed = JSON.parse(cachedData)
-          const updatedCategorized = { ...parsed.categorizedPlaylists }
-          
-          console.log('Original categories:', Object.keys(updatedCategorized))
-          console.log('Current category playlists count:', updatedCategorized[categoryName]?.length || 0)
-          console.log('Target category playlists count:', updatedCategorized[newCategory]?.length || 0)
-          
-          // Step 2: Add playlist to target category array first
-          if (!updatedCategorized[newCategory]) {
-            updatedCategorized[newCategory] = []
-          }
-          updatedCategorized[newCategory].push(playlist)
-          
-          console.log('Step 2: Added to target category. New count:', updatedCategorized[newCategory].length)
-          
-          // Step 3: Save to localStorage
-          const cacheData1: CachedData = {
-            categorizedPlaylists: updatedCategorized,
-            lastUpdated: new Date().toISOString()
-          }
-          localStorage.setItem('playlist-categories', JSON.stringify(cacheData1))
-          console.log('Step 3: Saved to localStorage after adding to target')
-          
-          // Step 4: Only then remove from current category array
-          updatedCategorized[categoryName] = updatedCategorized[categoryName]?.filter((p: YouTubePlaylist) => p.id !== playlistId) || []
-          
-          console.log('Step 4: Removed from current category. New count:', updatedCategorized[categoryName].length)
-          
-          // Step 5: Save to localStorage again
-          const cacheData2: CachedData = {
-            categorizedPlaylists: updatedCategorized,
-            lastUpdated: new Date().toISOString()
-          }
-          localStorage.setItem('playlist-categories', JSON.stringify(cacheData2))
-          console.log('Step 5: Saved to localStorage after removing from current')
-          
-          console.log('Final categories:', Object.keys(updatedCategorized))
-          console.log('Final target category playlists:', updatedCategorized[newCategory]?.map((p: YouTubePlaylist) => p.snippet.title))
-          console.log('Final current category playlists:', updatedCategorized[categoryName]?.map((p: YouTubePlaylist) => p.snippet.title))
-          console.log('==============================')
-          
-          // Step 6: Update the displayed playlists state on screen
-          setCategorizedPlaylists(updatedCategorized)
-          // Update the current category's playlists to reflect the removal
-          const updatedCurrentCategoryPlaylists = updatedCategorized[categoryName] || []
-          setCategoryPlaylists(updatedCurrentCategoryPlaylists)
-          
-          console.log(`UI State Updated: Current category "${categoryName}" now has ${updatedCurrentCategoryPlaylists.length} playlists`)
-          console.log('Updated current category playlists:', updatedCurrentCategoryPlaylists.map((p: YouTubePlaylist) => p.snippet.title))
-          
-          console.log(`Successfully moved playlist "${playlist.snippet.title}" from "${categoryName}" to "${newCategory}"`)
-        }
-        
-        // Show success message
-        setLockConfirmation(result.message || 'Playlist moved and locked')
-        
-        // Clear confirmation after 3 seconds
-        setTimeout(() => {
-          setLockConfirmation(null)
-        }, 3000)
-      } else {
-        const errorData = await response.json()
-        console.error('API error:', errorData)
-        setLockConfirmation(errorData.error || 'Failed to lock playlist')
-        setTimeout(() => setLockConfirmation(null), 3000)
-      }
-    } catch (error) {
-      console.error('Move playlist error:', error)
-      setLockConfirmation('Failed to lock playlist')
+    // Step 2: Find playlist in current category
+    const playlist = categories[categoryName]?.find((p: YouTubePlaylist) => p.id === playlistId)
+    if (!playlist) {
+      alert('Playlist not found in current category.')
+      return
+    }
+
+    console.log(`Moving "${playlist.snippet.title}" from "${categoryName}" to "${targetCategory}"`)
+
+    // Step 3: Add to target category first
+    if (!categories[targetCategory]) {
+      categories[targetCategory] = []
+    }
+    categories[targetCategory] = [...categories[targetCategory], playlist]
+
+    // Step 4: Remove from current category
+    categories[categoryName] = categories[categoryName].filter((p: YouTubePlaylist) => p.id !== playlistId)
+
+    // Step 5: Remove current category if now empty
+    if (categories[categoryName].length === 0) {
+      delete categories[categoryName]
+    }
+
+    // Step 6: Save to localStorage
+    const updatedData = { ...data, categorizedPlaylists: categories }
+    localStorage.setItem('playlist-categories', JSON.stringify(updatedData))
+
+    // Step 7: Update UI state
+    setCategoryPlaylists(categories[categoryName] || [])
+    setCategorizedPlaylists(categories)
+
+    // Step 8: Call API to lock playlist on server
+    const response = await fetch('/api/lock-playlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        playlistId,
+        playlistName: playlist.snippet.title,
+        targetCategory
+      })
+    })
+
+    if (response.ok) {
+      setLockConfirmation(`"${playlist.snippet.title}" moved to ${targetCategory}`)
+      setTimeout(() => setLockConfirmation(null), 3000)
+    } else {
+      console.error('Failed to lock on server but localStorage updated successfully')
+      setLockConfirmation(`Moved to ${targetCategory} (local only)`)
       setTimeout(() => setLockConfirmation(null), 3000)
     }
+  } catch (error) {
+    console.error('Move failed:', error)
+    alert('Failed to move playlist. Please try again.')
   }
+}
 
   const getHiddenPlaylists = (): string[] => {
     try {
@@ -354,9 +332,16 @@ export default function CategoryPage() {
           
           <button
             onClick={() => router.push('/dashboard')}
-            className="text-slate-300 hover:text-white transition-colors"
+            className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg transition-colors"
           >
-            Home
+            ← Back
+          </button>
+          
+          <button
+            onClick={handleSignOut}
+            className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg transition-colors"
+          >
+            Sign Out
           </button>
         </div>
 
