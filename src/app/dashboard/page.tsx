@@ -105,6 +105,8 @@ export default function Dashboard() {
 })
   const [loading, setLoading] = useState(true)
   const [recategorizing, setRecategorizing] = useState(false)
+  const [isRecatRunning, setIsRecatRunning] = useState(false)
+  const [recatProgress, setRecatProgress] = useState('')
   const [showHiddenPlaylists, setShowHiddenPlaylists] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [sortBy, setSortBy] = useState('name-az')
@@ -356,28 +358,27 @@ export default function Dashboard() {
     } finally {
       setLoading(false)
       setRecategorizing(false)
+      setIsRecatRunning(false)
     }
   }
 
   useEffect(() => {
-  // If cache exists, check if it belongs to current user
+  if (!sessionData.data?.user?.email) return // Wait for session to load
+  
   if (Object.keys(categorizedPlaylists).length > 0) {
     const cached = localStorage.getItem('playlist-categories')
     if (cached) {
       const parsed = JSON.parse(cached)
-      // If different user, clear and refetch
-      if (parsed.userEmail && sessionData.data?.user?.email && parsed.userEmail !== sessionData.data.user.email) {
+      if (parsed.userEmail && parsed.userEmail !== sessionData.data.user.email) {
         localStorage.removeItem('playlist-categories')
         fetchPlaylistsAndCategories(false)
         return
       }
       console.log("Cache loaded successfully")
     }
-    // Same user — use cache instantly
     setLoading(false)
     return
   }
-  // No cache — fetch fresh
   fetchPlaylistsAndCategories()
 }, [sessionData.data?.user?.email])
 
@@ -395,6 +396,8 @@ export default function Dashboard() {
   }, [Object.keys(categorizedPlaylists).length])
 
   const handleRecategorize = () => {
+    setIsRecatRunning(true)
+    setRecatProgress('Fetching your playlists...')
     localStorage.removeItem('playlist-categories')
     setRecategorizing(true)
     fetchPlaylistsAndCategories(false)
@@ -660,16 +663,16 @@ export default function Dashboard() {
             </p>
           </div>
           <div className="flex flex-col sm:flex-row gap-2">
-            <button
-              onClick={handleRecategorize}
-              disabled={recategorizing}
-              className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg transition-colors flex items-center gap-2"
-            >
-              {recategorizing && (
-                <div className="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-              )}
-              Re-categorize All Playlists
-            </button>
+            {isRecatRunning ? (
+              <div className="text-center py-2">
+                <div className="text-white text-sm font-medium">{recatProgress || 'Categorizing your playlists...'}</div>
+                <div className="text-gray-400 text-xs mt-1">This may take 1-2 minutes. Please wait.</div>
+              </div>
+            ) : (
+              <button onClick={handleRecategorize} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">
+                Re-categorize All Playlists
+              </button>
+            )}
             <button
               onClick={() => setShowHiddenPlaylists(true)}
               className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg transition-colors"
