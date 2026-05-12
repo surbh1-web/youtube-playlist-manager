@@ -143,17 +143,16 @@ export default function Dashboard() {
   }
 
   const unhidePlaylist = (playlistId: string) => {
-    try {
-      const hidden = getHiddenPlaylists()
-      const updatedHidden = hidden.filter(id => id !== playlistId)
-      localStorage.setItem('hidden-playlists', JSON.stringify(updatedHidden))
-      
-      // Refresh data
-      fetchPlaylistsAndCategories()
-    } catch (error) {
-      console.error('Error unhiding playlist:', error)
-    }
+  try {
+    const hidden = getHiddenPlaylists()
+    const updatedHidden = hidden.filter(id => id !== playlistId)
+    localStorage.setItem('hidden-playlists', JSON.stringify(updatedHidden))
+    setCategorizedPlaylists(prev => ({ ...prev }))
+    setShowHiddenPlaylists(false)
+  } catch (error) {
+    console.error('Error unhiding playlist:', error)
   }
+}
 
   const getCacheAge = (lastUpdated: string): string => {
     if (!lastUpdated) return 'Unknown'
