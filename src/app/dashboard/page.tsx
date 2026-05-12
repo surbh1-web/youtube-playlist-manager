@@ -110,6 +110,7 @@ export default function Dashboard() {
   const [sortBy, setSortBy] = useState('name-az')
   const [activeMode, setActiveMode] = useState('Categories')
   const [buildingIndex, setBuildingIndex] = useState(false)
+  const [buildingIndexBackground, setBuildingIndexBackground] = useState(false)
   const [indexProgress, setIndexProgress] = useState({ current: 0, total: 0 })
   const [syncStatus, setSyncStatus] = useState<string>('')
   const [newPlaylists, setNewPlaylists] = useState<any[]>([])
@@ -388,6 +389,7 @@ export default function Dashboard() {
       const existingIndex = localStorage.getItem('video-search-index')
       if (!existingIndex) {
         // Build silently in background — no loading spinner shown to user
+        setBuildingIndexBackground(true)
         buildVideoIndex()
       }
     }
@@ -511,6 +513,8 @@ export default function Dashboard() {
     } finally {
       if (!silent) {
         setBuildingIndex(false)
+      } else {
+        setBuildingIndexBackground(false)
       }
     }
   }
@@ -763,7 +767,7 @@ export default function Dashboard() {
         </div>
 
         {/* Video Index Building Progress */}
-        {buildingIndex && (
+        {buildingIndex && activeMode === 'Videos' && (
           <div className="bg-slate-800/50 backdrop-blur-sm rounded-xl p-4 mb-6 border border-slate-700">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
