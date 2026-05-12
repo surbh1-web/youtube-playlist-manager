@@ -381,6 +381,18 @@ export default function Dashboard() {
   fetchPlaylistsAndCategories()
 }, [sessionData.data?.user?.email])
 
+  // Build video index in background after categories load
+  useEffect(() => {
+    // Build video index in background after categories load
+    if (Object.keys(categorizedPlaylists).length > 0) {
+      const existingIndex = localStorage.getItem('video-search-index')
+      if (!existingIndex) {
+        // Build silently in background — no loading spinner shown to user
+        buildVideoIndex()
+      }
+    }
+  }, [Object.keys(categorizedPlaylists).length])
+
   const handleRecategorize = () => {
     localStorage.removeItem('playlist-categories')
     setRecategorizing(true)
@@ -430,9 +442,13 @@ export default function Dashboard() {
   }
 
   // Build video search index
-  const buildVideoIndex = async (): Promise<void> => {
+  const buildVideoIndex = async (silent = false): Promise<void> => {
     try {
-      setBuildingIndex(true)
+      if (!silent) {
+        setBuildingIndex(true)
+      } else {
+        console.log("Building video index in background...")
+      }
       
       // Get all playlists across all categories
       const allPlaylists: (YouTubePlaylist & { categoryName: string })[] = []
@@ -493,7 +509,9 @@ export default function Dashboard() {
     } catch (error) {
       console.error('Error building video index:', error)
     } finally {
-      setBuildingIndex(false)
+      if (!silent) {
+        setBuildingIndex(false)
+      }
     }
   }
 
@@ -501,7 +519,7 @@ export default function Dashboard() {
   const ensureVideoIndex = async (): Promise<void> => {
     const existingIndex = localStorage.getItem('video-search-index')
     if (!existingIndex) {
-      await buildVideoIndex()
+      await buildVideoIndex(false) // Build silently in background
     }
   }
 
@@ -593,9 +611,17 @@ export default function Dashboard() {
   const handleSearchChange = async (value: string) => {
     setSearchTerm(value)
     
-    // Build video index when user switches to Videos mode and types for the first time
+    // Handle Videos mode scenarios
     if (activeMode === 'Videos' && value.trim() !== '') {
-      await ensureVideoIndex()
+      const existingIndex = localStorage.getItem('video-search-index')
+      if (existingIndex) {
+        // Index exists → search instantly
+        return
+      }
+      if (!buildingIndex) {
+        // Index doesn't exist and not being built → start building and show progress
+        await buildVideoIndex(false) // Show loading spinner
+      }
     }
   }
 
@@ -658,6 +684,25 @@ export default function Dashboard() {
 
         {/* Search and Controls */}
         <div className="flex flex-col lg:flex-row gap-4 mb-8">
+          {/* Mode Toggle */}
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-2">Mode</label>
+            <div className="flex gap-2">
+              {['Categories', 'Playlists', 'Videos'].map((mode) => (
+                <button
+                  key={mode}
+                  onClick={() => handleModeChange(mode)}
+                  className={activeMode === mode
+                    ? "px-3 py-2 rounded-lg text-sm font-medium transition-colors bg-white text-slate-900"
+                    : "px-3 py-2 rounded-lg text-sm font-medium transition-colors bg-transparent text-slate-400 hover:text-white border border-slate-600"
+                  }
+                >
+                  {mode}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Search Box */}
           <div className="relative flex-1">
             <label className="block text-sm font-medium text-slate-300 mb-2">Search</label>
