@@ -382,6 +382,26 @@ export default function Dashboard() {
   fetchPlaylistsAndCategories()
 }, [sessionData.data?.user?.email])
 
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (loading && Object.keys(categorizedPlaylists).length === 0) {
+        fetchPlaylistsAndCategories()
+      }
+    }, 3000)
+    return () => clearTimeout(timer)
+  }, [loading])
+
+  // Fallback: if loading is still true after 3 seconds and no categories loaded, force fetch
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (loading && Object.keys(categorizedPlaylists).length === 0) {
+        console.log('Fallback fetch triggered after 3 second timeout')
+        fetchPlaylistsAndCategories()
+      }
+    }, 3000)
+    return () => clearTimeout(timer)
+  }, [loading])
+
   // Build video index in background after categories load
   useEffect(() => {
     // Build video index in background after categories load
