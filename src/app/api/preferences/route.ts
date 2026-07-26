@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
-import { readPreferences, writePreferences, sanitizeInput } from '@/lib/preferences'
+import { readPreferences, writePreferences, sanitizeInput, getUserKey } from '@/lib/preferences'
 import { UserPreferences } from '@/types/preferences'
 import { authOptions } from '@/lib/auth'
 
@@ -15,8 +15,8 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Read current preferences
-    const preferences = await readPreferences()
+    // Read current preferences (per-user)
+    const preferences = await readPreferences(getUserKey(session.user.email))
     
     // Only return data relevant to authenticated user (no sensitive data exposure)
     const userPreferences = {
@@ -46,6 +46,7 @@ export async function POST(request: NextRequest) {
         { status: 401 }
       )
     }
+    const userKey = getUserKey(session.user.email)
 
     const body = await request.json()
     
@@ -77,8 +78,8 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Read current preferences first
-    const currentPreferences = await readPreferences()
+    // Read current preferences first (per-user)
+    const currentPreferences = await readPreferences(userKey)
     
     // Merge with existing data, preserving lockedPlaylists (security)
     const updatedPreferences: UserPreferences = {
@@ -87,8 +88,8 @@ export async function POST(request: NextRequest) {
       lockedPlaylists: currentPreferences.lockedPlaylists // Never update locked playlists via API
     }
 
-    // Write to file with locking
-    const success = await writePreferences(updatedPreferences)
+    // Write to the per-user file
+    const success = await writePreferences(userKey, updatedPreferences)
     
     if (!success) {
       return NextResponse.json(

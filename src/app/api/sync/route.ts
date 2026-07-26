@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
-import { readPreferences, writePreferences } from '@/lib/preferences'
-import { authOptions } from '@/lib/auth'
+import { readPreferences, writePreferences, getUserKey } from '@/lib/preferences'
+import { authOptions, getAccessToken } from '@/lib/auth'
 
 interface YouTubePlaylist {
   id: string
   snippet: {
     title: string
     description: string
+    channelTitle?: string
   }
 }
 
@@ -15,36 +16,54 @@ export async function POST(request: NextRequest) {
   try {
     // Verify user is authenticated
     const session = await getServerSession(authOptions)
-    if (!session?.user?.email || !session.accessToken) {
+    const accessToken = await getAccessToken(request)
+    if (!session?.user?.email || !accessToken) {
       return NextResponse.json(
         { error: 'Authentication required' },
         { status: 401 }
       )
     }
+    const userKey = getUserKey(session.user.email)
+    const cookieHeader = request.headers.get('cookie') ?? ''
 
-    // Fetch current playlists from YouTube API
-    const playlistsResponse = await fetch(
-      `https://www.googleapis.com/youtube/v3/playlists?part=snippet&maxResults=50&mine=true`,
-      {
-        headers: {
-          'Authorization': `Bearer ${session.accessToken}`,
-          'Content-Type': 'application/json'
-        }
+    // Fetch ALL current playlists from YouTube (paginated) and filter out auto-generated
+    // ones. This MUST match /api/youtube/playlists — otherwise a new playlist beyond the
+    // first 50 (or in a later page) is never detected as "new" and incremental sync misses
+    // it, even though a full rebuild would find it.
+    const currentPlaylists: YouTubePlaylist[] = []
+    let pageToken: string | null = null
+    do {
+      const url = new URL('https://www.googleapis.com/youtube/v3/playlists')
+      url.searchParams.set('part', 'snippet')
+      url.searchParams.set('maxResults', '50')
+      url.searchParams.set('mine', 'true')
+      if (pageToken) url.searchParams.set('pageToken', pageToken)
+
+      const resp = await fetch(url.toString(), {
+        headers: { 'Authorization': `Bearer ${accessToken}`, 'Accept': 'application/json' },
+      })
+      if (!resp.ok) {
+        return NextResponse.json(
+          { error: 'Failed to fetch playlists from YouTube' },
+          { status: 500 }
+        )
       }
-    )
+      const data = await resp.json()
+      const items: YouTubePlaylist[] = data.items || []
+      for (const pl of items) {
+        const id = pl.id || ''
+        const title = pl.snippet?.title || ''
+        const channelTitle = pl.snippet?.channelTitle || ''
+        if (id.startsWith('WL') || id.startsWith('LL') || id.startsWith('RD')) continue
+        if (!title.trim()) continue
+        if (title === channelTitle) continue
+        currentPlaylists.push(pl)
+      }
+      pageToken = data.nextPageToken || null
+    } while (pageToken)
 
-    if (!playlistsResponse.ok) {
-      return NextResponse.json(
-        { error: 'Failed to fetch playlists from YouTube' },
-        { status: 500 }
-      )
-    }
-
-    const playlistsData = await playlistsResponse.json()
-    const currentPlaylists: YouTubePlaylist[] = playlistsData.items || []
-
-    // Read stored playlist records
-    const storedPreferences = await readPreferences()
+    // Read stored playlist records (per-user)
+    const storedPreferences = await readPreferences(userKey)
     const storedPlaylistIds = new Set(Object.keys(storedPreferences.playlists))
     const currentPlaylistIds = new Set(currentPlaylists.map(p => p.id))
 
@@ -82,7 +101,8 @@ export async function POST(request: NextRequest) {
           const response = await fetch(`${request.nextUrl.origin}/api/check-rename`, {
             method: 'POST',
             headers: {
-              'Content-Type': 'application/json'
+              'Content-Type': 'application/json',
+              'Cookie': cookieHeader
             },
             body: JSON.stringify({
               playlistId: playlist.id,
@@ -121,7 +141,8 @@ export async function POST(request: NextRequest) {
         const cleanupResponse = await fetch(`${request.nextUrl.origin}/api/cleanup-deleted`, {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Cookie': cookieHeader
           },
           body: JSON.stringify({
             deletedPlaylistIds: deletedPlaylists
@@ -143,7 +164,7 @@ export async function POST(request: NextRequest) {
       lastSync: new Date().toISOString()
     }
 
-    await writePreferences(updatedPreferences)
+    await writePreferences(userKey, updatedPreferences)
 
     return NextResponse.json({
       newPlaylists: newPlaylists.map(p => ({

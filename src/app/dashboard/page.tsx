@@ -33,6 +33,7 @@ interface ExtendedPlaylist extends YouTubePlaylist {
 interface CachedData {
   categorizedPlaylists: Record<string, YouTubePlaylist[]>
   lastUpdated: string
+  lastFullRebuild?: string  // timestamp of the last FULL rebuild; anchors the 30-day window
   userEmail?: string
 }
 
@@ -180,6 +181,84 @@ export default function Dashboard() {
            typeof data.lastUpdated === 'string'
   }
 
+  // INCREMENTAL categorization: only the changed (new/renamed) playlists are sent to the
+  // model and slotted into the EXISTING categories. All other playlists keep their cached
+  // category — no full rebuild. Playlist metadata is still fetched (cheap, no LLM) so new
+  // playlists render with thumbnails and the grouping stays correct.
+  const incrementalCategorize = async (changed: { id: string; title: string }[]) => {
+    try {
+      const playlistsResponse = await fetch("/api/youtube/playlists", { credentials: 'include' })
+      if (!playlistsResponse.ok) { return fetchPlaylistsAndCategories(false) }
+      const all: YouTubePlaylist[] = (await playlistsResponse.json()).playlists || []
+
+      // Derive id -> category from the current cache (existing playlists keep their category).
+      // Also preserve the last FULL-rebuild timestamp — incremental updates must NOT reset
+      // the 30-day content-drift window; only a full "Re-categorize All" does.
+      const idToCat: Record<string, string> = {}
+      let prevFullRebuild: string | undefined
+      try {
+        const cached = JSON.parse(localStorage.getItem('playlist-categories') || '{}')
+        prevFullRebuild = cached.lastFullRebuild
+        const groups = cached.categorizedPlaylists || {}
+        for (const cat of Object.keys(groups)) {
+          for (const pl of groups[cat]) idToCat[pl.id] = cat
+        }
+      } catch {}
+
+      // Self-healing: categorize the changed playlists AND any current playlist that is
+      // missing from the cache (e.g. a new playlist that a prior sync recorded but never
+      // displayed). Nothing missing/changed => no model calls, just a regroup.
+      const toDo = new Map<string, { id: string; name: string }>()
+      for (const c of changed) toDo.set(c.id, { id: c.id, name: c.title })
+      for (const pl of all) {
+        if (!idToCat[pl.id]) toDo.set(pl.id, { id: pl.id, name: pl.snippet?.title || '' })
+      }
+      const list = Array.from(toDo.values())
+      const resp = list.length
+        ? await fetch("/api/categorize-new", {
+            method: "POST",
+            credentials: 'include',
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ playlists: list.map(x => ({ id: x.id, name: x.name, description: "" })) }),
+          })
+        : null
+      if (resp && resp.ok) {
+        const data = await resp.json()
+        for (const cp of (data.categorizedPlaylists || [])) idToCat[cp.id] = cp.category
+        if (data.categoryEmojis) {
+          try {
+            const existingEmojis = localStorage.getItem('category-emojis')
+            const merged = existingEmojis
+              ? { ...JSON.parse(existingEmojis), ...data.categoryEmojis }
+              : data.categoryEmojis
+            localStorage.setItem('category-emojis', JSON.stringify(merged))
+          } catch {}
+        }
+      }
+
+      // Regroup ALL playlists (existing keep cached category; changed use the new one;
+      // deleted naturally drop out since they are not in `all`).
+      const grouped: Record<string, YouTubePlaylist[]> = {}
+      all.forEach((pl) => {
+        const cat = idToCat[pl.id] || 'Uncategorized'
+        if (!grouped[cat]) grouped[cat] = []
+        grouped[cat].push(pl)
+      })
+      setCategorizedPlaylists(grouped)
+      setCacheAge('Just now')
+      const cacheData: CachedData = {
+        categorizedPlaylists: grouped,
+        lastUpdated: new Date().toISOString(),
+        lastFullRebuild: prevFullRebuild,  // incremental does NOT reset the 30-day window
+        userEmail: sessionData.data?.user?.email || undefined,
+      }
+      localStorage.setItem('playlist-categories', JSON.stringify(cacheData))
+    } catch (e) {
+      console.error('Incremental categorize failed; falling back to full rebuild:', e)
+      fetchPlaylistsAndCategories(false)
+    }
+  }
+
   const runBackgroundSync = async () => {
     try {
       setSyncStatus('syncing')
@@ -224,10 +303,14 @@ export default function Dashboard() {
         }
       }
       
-      if (result.newPlaylists?.length > 0 || result.renamedPlaylists?.length > 0) {
-        // If there are new or renamed playlists, do a full refresh
-        fetchPlaylistsAndCategories(false)
-      }
+      // Always reconcile the display against the actual playlists: categorize new/renamed
+      // AND self-heal any playlist missing from the cache. If nothing changed this is a
+      // cheap regroup with no model calls.
+      const changed = [
+        ...(result.newPlaylists || []).map((p: any) => ({ id: p.id, title: p.title })),
+        ...(result.renamedPlaylists || []).map((p: any) => ({ id: p.id, title: p.newTitle })),
+      ]
+      await incrementalCategorize(changed)
       
       setSyncStatus('done')
       setTimeout(() => setSyncStatus('idle'), 3000)
@@ -249,13 +332,18 @@ export default function Dashboard() {
             setCacheAge(getCacheAge(parsed.lastUpdated))
             setLoading(false) // Hide loading immediately
             
-            // Check if cache is recent (< 24 hours)
-            const lastSync = new Date(parsed.lastUpdated)
+            // 30-day window is measured from the last FULL rebuild (Re-categorize All),
+            // NOT from incremental/sync writes — so incremental updates never postpone the
+            // content-drift rebuild. Fall back to lastUpdated for old caches.
+            const anchor = new Date(parsed.lastFullRebuild || parsed.lastUpdated)
             const now = new Date()
-            const diffHours = (now.getTime() - lastSync.getTime()) / (1000 * 60 * 60)
+            const diffHours = (now.getTime() - anchor.getTime()) / (1000 * 60 * 60)
             
-            // If cache is recent, run sync in background but skip full fetch
-            if (diffHours < 24) {
+            // If cache is recent, run sync in background but skip the full rebuild.
+            // Window is 30 days (720h): a routine login never triggers a slow full
+            // re-categorization. New/renamed playlists are handled incrementally by the
+            // background sync; a full rebuild only happens via "Re-categorize All".
+            if (diffHours < 720) {
               runBackgroundSync()
               return
             }
@@ -305,7 +393,29 @@ export default function Dashboard() {
         }
 
         const categorizationData = await categorizeResponse.json()
-        
+
+        // Store LLM-suggested emojis for the (new, granular) categories
+        if (categorizationData.categoryEmojis) {
+          try {
+            const existingEmojis = localStorage.getItem('category-emojis')
+            const mergedEmojis = existingEmojis
+              ? { ...JSON.parse(existingEmojis), ...categorizationData.categoryEmojis }
+              : categorizationData.categoryEmojis
+            localStorage.setItem('category-emojis', JSON.stringify(mergedEmojis))
+          } catch (e) {}
+        }
+
+        // Store the broad theme of each category (used to cluster related categories)
+        if (categorizationData.categoryThemes) {
+          try {
+            const existingThemes = localStorage.getItem('category-themes')
+            const mergedThemes = existingThemes
+              ? { ...JSON.parse(existingThemes), ...categorizationData.categoryThemes }
+              : categorizationData.categoryThemes
+            localStorage.setItem('category-themes', JSON.stringify(mergedThemes))
+          } catch (e) {}
+        }
+
         // Group playlists by category
         const grouped: Record<string, YouTubePlaylist[]> = {}
         fetchedPlaylists.forEach((playlist: YouTubePlaylist) => {
@@ -325,6 +435,7 @@ export default function Dashboard() {
         const cacheData: CachedData = {
           categorizedPlaylists: grouped,
           lastUpdated: new Date().toISOString(),
+          lastFullRebuild: new Date().toISOString(),  // full rebuild resets the 30-day window
           userEmail: sessionData.data?.user?.email || undefined
         }
         console.log("Saving to cache")
@@ -377,6 +488,10 @@ export default function Dashboard() {
       console.log("Cache loaded successfully")
     }
     setLoading(false)
+    // Cache is shown instantly; now reconcile in the background so new/renamed/deleted
+    // playlists (and any missing ones) get picked up incrementally. Without this, a load
+    // with an existing cache never checks YouTube for changes.
+    runBackgroundSync()
     return
   }
   fetchPlaylistsAndCategories()
@@ -419,6 +534,9 @@ export default function Dashboard() {
     setIsRecatRunning(true)
     setRecatProgress('Fetching your playlists...')
     localStorage.removeItem('playlist-categories')
+    // The video search index caches each video's category — rebuild it after a
+    // re-categorization so the Videos tab reflects the new categories, not stale ones.
+    localStorage.removeItem('video-search-index')
     setRecategorizing(true)
     fetchPlaylistsAndCategories(false)
   }

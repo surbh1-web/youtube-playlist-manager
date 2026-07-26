@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
-import { authOptions } from "@/lib/auth"
+import { authOptions, getAccessToken } from "@/lib/auth"
 
 interface YouTubeVideoItem {
   id: string
@@ -47,8 +47,9 @@ export async function GET(
 ) {
   try {
     const session = await getServerSession(authOptions)
-    
-    if (!session || !session.accessToken) {
+    const accessToken = await getAccessToken(request)
+
+    if (!session?.user?.email || !accessToken) {
       return NextResponse.json(
         { error: "Unauthorized - No access token found" },
         { status: 401 }
@@ -57,9 +58,10 @@ export async function GET(
 
     const { playlistId } = await context.params
 
-    // Fetch playlist items from YouTube API
+    // Fetch playlist items from YouTube API (token in header, never in the URL)
     const playlistItemsResponse = await fetch(
-      `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails&maxResults=50&playlistId=${playlistId}&access_token=${session.accessToken}`
+      `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails&maxResults=50&playlistId=${encodeURIComponent(playlistId)}`,
+      { headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" } }
     )
 
     if (!playlistItemsResponse.ok) {
@@ -89,9 +91,10 @@ export async function GET(
       })
     }
 
-    // Fetch video details
+    // Fetch video details (token in header, never in the URL)
     const videosResponse = await fetch(
-      `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=${videoIds}&access_token=${session.accessToken}`
+      `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=${encodeURIComponent(videoIds)}`,
+      { headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" } }
     )
 
     if (!videosResponse.ok) {

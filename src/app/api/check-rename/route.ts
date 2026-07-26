@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
-import { readPreferences, writePreferences, sanitizeInput } from '@/lib/preferences'
+import { readPreferences, writePreferences, sanitizeInput, getUserKey } from '@/lib/preferences'
 import { getEmbedding, cosineSimilarity, isWordSuperset } from '@/lib/embeddings'
 import { authOptions } from '@/lib/auth'
 
@@ -20,6 +20,7 @@ export async function POST(request: NextRequest) {
         { status: 401 }
       )
     }
+    const userKey = getUserKey(session.user.email)
 
     const body: RenameRequest = await request.json()
     
@@ -34,8 +35,8 @@ export async function POST(request: NextRequest) {
     const sanitizedOldTitle = sanitizeInput(body.oldTitle)
     const sanitizedNewTitle = sanitizeInput(body.newTitle)
 
-    // Check if playlist is locked
-    const preferences = await readPreferences()
+    // Check if playlist is locked (per-user)
+    const preferences = await readPreferences(userKey)
     const playlist = preferences.playlists[body.playlistId]
     
     if (playlist && playlist.isLocked) {
@@ -95,7 +96,7 @@ export async function POST(request: NextRequest) {
         }
       }
       
-      await writePreferences({
+      await writePreferences(userKey, {
         ...preferences,
         playlists: updatedPlaylists,
         lastSync: new Date().toISOString()

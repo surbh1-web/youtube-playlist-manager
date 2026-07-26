@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
-import { readPreferences, writePreferences, sanitizeInput } from '@/lib/preferences'
+import { readPreferences, writePreferences, sanitizeInput, getUserKey } from '@/lib/preferences'
 import { authOptions } from '@/lib/auth'
 
 interface LockPlaylistRequest {
@@ -11,8 +11,6 @@ interface LockPlaylistRequest {
 
 export async function POST(request: NextRequest) {
   try {
-    console.log('=== LOCK PLAYLIST API CALLED ===')
-    
     // Verify user is authenticated
     const session = await getServerSession(authOptions)
     if (!session?.user?.email) {
@@ -21,21 +19,15 @@ export async function POST(request: NextRequest) {
         { status: 401 }
       )
     }
+    const userKey = getUserKey(session.user.email)
 
     const body: LockPlaylistRequest = await request.json()
-    console.log('Request body:', body)
-    
+
     // Sanitize all inputs
     const sanitizedPlaylistId = sanitizeInput(body.playlistId)
     const sanitizedPlaylistName = sanitizeInput(body.playlistName)
     const sanitizedTargetCategory = sanitizeInput(body.targetCategory)
-    
-    console.log('Sanitized inputs:', {
-      playlistId: sanitizedPlaylistId,
-      playlistName: sanitizedPlaylistName,
-      targetCategory: sanitizedTargetCategory
-    })
-    
+
     // Validate inputs
     if (!sanitizedPlaylistId || !sanitizedPlaylistName || !sanitizedTargetCategory) {
       return NextResponse.json(
@@ -44,9 +36,8 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Read current preferences from database
-    const preferences = await readPreferences()
-    console.log('Current preferences loaded')
+    // Read current preferences (per-user)
+    const preferences = await readPreferences(userKey)
     
     // Update playlist record to mark as locked and move to new category
     const updatedPlaylists = {
@@ -69,31 +60,22 @@ export async function POST(request: NextRequest) {
     
     const updatedLockedPlaylists: Record<string, string> = { ...(preferences.lockedPlaylists || {}) }
     updatedLockedPlaylists[sanitizedPlaylistId] = JSON.stringify(lockedPlaylistData)
-    
-    console.log('About to write to database:', {
-      playlistsCount: Object.keys(updatedPlaylists).length,
-      lockedPlaylistsCount: Object.keys(updatedLockedPlaylists).length,
-      lockedPlaylistData
-    })
-    
-    // Write updated preferences to database
-    const writeSuccess = await writePreferences({
+
+    // Write updated preferences (per-user)
+    const writeSuccess = await writePreferences(userKey, {
       ...preferences,
       playlists: updatedPlaylists,
       lockedPlaylists: updatedLockedPlaylists,
       lastSync: new Date().toISOString()
     })
-    
+
     if (!writeSuccess) {
-      console.error('Database write failed')
       return NextResponse.json(
-        { error: 'Failed to save lock data to database' },
+        { error: 'Failed to save lock data' },
         { status: 500 }
       )
     }
-    
-    console.log('Database write successful')
-    
+
     return NextResponse.json({
       success: true,
       message: 'Playlist locked and moved successfully',
@@ -102,7 +84,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('Lock playlist error:', error)
     return NextResponse.json(
-      { error: 'Failed to lock playlist: ' + (error instanceof Error ? error.message : 'Unknown error') },
+      { error: 'Failed to lock playlist' },
       { status: 500 }
     )
   }

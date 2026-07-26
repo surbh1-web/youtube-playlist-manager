@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
-import { authOptions } from "@/lib/auth"
+import { authOptions, getAccessToken } from "@/lib/auth"
 
 interface VideoItem {
   id: string
@@ -44,8 +44,9 @@ interface VideosResponse {
 export async function POST(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions)
-    
-    if (!session?.accessToken) {
+    const accessToken = await getAccessToken(request)
+
+    if (!session?.user?.email || !accessToken) {
       return NextResponse.json(
         { error: "Unauthorized - No access token found" },
         { status: 401 }
@@ -82,7 +83,7 @@ export async function POST(request: NextRequest) {
 
       const response = await fetch(url.toString(), {
         headers: {
-          Authorization: `Bearer ${session.accessToken}`,
+          Authorization: `Bearer ${accessToken}`,
           Accept: "application/json",
         },
       })

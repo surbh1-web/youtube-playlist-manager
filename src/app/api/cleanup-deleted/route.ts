@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
-import { readPreferences, writePreferences, sanitizeInput } from '@/lib/preferences'
+import { readPreferences, writePreferences, sanitizeInput, getUserKey } from '@/lib/preferences'
 import { authOptions } from '@/lib/auth'
 
 interface CleanupRequest {
@@ -17,6 +17,7 @@ export async function POST(request: NextRequest) {
         { status: 401 }
       )
     }
+    const userKey = getUserKey(session.user.email)
 
     const body: CleanupRequest = await request.json()
     
@@ -31,8 +32,8 @@ export async function POST(request: NextRequest) {
     // Sanitize playlist IDs
     const sanitizedDeletedIds = body.deletedPlaylistIds.map(id => sanitizeInput(id))
 
-    // Read current preferences
-    const preferences = await readPreferences()
+    // Read current preferences (per-user)
+    const preferences = await readPreferences(userKey)
     
     // Remove from playlists record
     const updatedPlaylists = { ...preferences.playlists }
@@ -53,8 +54,8 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Write updated preferences
-    await writePreferences({
+    // Write updated preferences (per-user)
+    await writePreferences(userKey, {
       ...preferences,
       playlists: updatedPlaylists,
       lockedPlaylists: updatedLockedPlaylists,

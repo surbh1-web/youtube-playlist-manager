@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth/next"
-import { authOptions } from "@/lib/auth"
+import { authOptions, getAccessToken } from "@/lib/auth"
 
 interface YouTubePlaylist {
   id: string
@@ -46,8 +46,9 @@ interface PlaylistsResponse {
 export async function GET(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions)
-    
-    if (!session?.accessToken) {
+    const accessToken = await getAccessToken(request)
+
+    if (!session?.user?.email || !accessToken) {
       return NextResponse.json(
         { error: "Unauthorized - No access token found" },
         { status: 401 }
@@ -74,7 +75,7 @@ export async function GET(request: NextRequest) {
 
       const response = await fetch(url.toString(), {
         headers: {
-          Authorization: `Bearer ${session.accessToken}`,
+          Authorization: `Bearer ${accessToken}`,
           Accept: "application/json",
         },
       })
@@ -101,23 +102,7 @@ export async function GET(request: NextRequest) {
       }
 
       const data: PlaylistsResponse = await response.json()
-      
-      // Debug: Log exact data structure of first 3 playlists
-      console.log("=== PLAYLIST DATA STRUCTURE DEBUG ===")
-      console.log("First 3 playlists:")
-      data.items.slice(0, 3).forEach((playlist, index) => {
-        console.log(`Playlist ${index + 1}:`, {
-          id: playlist.id,
-          title: playlist.snippet?.title,
-          contentDetails: playlist.contentDetails,
-          itemCount: playlist.contentDetails?.itemCount,
-          // Log all possible video count fields
-          videoCount: (playlist as any).videoCount,
-          fullContentDetails: playlist.contentDetails
-        })
-      })
-      console.log("=== END DEBUG ===")
-      
+
       // Filter out auto-generated YouTube playlists
       const filteredPlaylists = data.items.filter((playlist: YouTubePlaylist) => {
         const playlistId = playlist.id || ''
