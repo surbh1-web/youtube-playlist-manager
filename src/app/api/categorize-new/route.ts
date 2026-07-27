@@ -205,6 +205,7 @@ export async function POST(request: NextRequest) {
       ...preferences,
       categories: updatedCategories,
       playlists: updatedPlaylists,
+      categoryEmojis: { ...(preferences.categoryEmojis || {}), ...categoryEmojis },
       lastSync: now,
     })
 

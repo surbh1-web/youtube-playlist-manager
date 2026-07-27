@@ -52,6 +52,8 @@ export const readPreferences = async (userKey: string): Promise<UserPreferences>
       lockedPlaylists: preferences.lockedPlaylists || {},
       categories: preferences.categories || [],
       lastSync: preferences.lastSync || null,
+      rateLimits: preferences.rateLimits || {},
+      categoryEmojis: preferences.categoryEmojis || {},
     }
   } catch {
     // Missing file / parse error → defaults (do not log user data)
@@ -74,6 +76,8 @@ export const writePreferences = async (
       lockedPlaylists: data.lockedPlaylists || {},
       categories: data.categories || [],
       lastSync: data.lastSync || null,
+      rateLimits: data.rateLimits || {},
+      categoryEmojis: data.categoryEmojis || {},
     }
 
     await fs.mkdir(PREFERENCES_DIR, { recursive: true })

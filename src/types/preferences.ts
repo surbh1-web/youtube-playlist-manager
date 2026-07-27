@@ -12,6 +12,12 @@ interface UserPreferences {
   lockedPlaylists: Record<string, string>
   categories: string[]
   lastSync: string | null
+  // Per-action rate-limit ledger: action name -> list of epoch-ms timestamps of attempts.
+  // Used by /api/rate-limit to enforce a rolling per-user, per-hour cap in production.
+  rateLimits?: Record<string, number[]>
+  // Category name -> emoji. Persisted so emojis survive a localStorage cache clear and can
+  // be restored on login (same as categories).
+  categoryEmojis?: Record<string, string>
 }
 
 export type { PlaylistRecord, UserPreferences }

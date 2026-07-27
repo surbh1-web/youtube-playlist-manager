@@ -38,20 +38,11 @@ interface CachedData {
 }
 
 const handleSignOut = async () => {
-  if (typeof window !== 'undefined') {
-    // Only clear playlist cache — do not clear everything
-    // This prevents other users seeing this user's data
-    // but preserves cache if same user signs back in
-    localStorage.removeItem('playlist-categories')
-    localStorage.removeItem('video-search-index')
-    localStorage.removeItem('category-emojis')
-    // Remove all playlist video caches
-    Object.keys(localStorage).forEach(key => {
-      if (key.startsWith('playlist-videos-')) {
-        localStorage.removeItem(key)
-      }
-    })
-  }
+  // Do NOT wipe the localStorage cache on sign-out — that caused a full rebuild on the
+  // next login. The same user signing back in on this device keeps their categories; a
+  // DIFFERENT user is handled by the userEmail-mismatch check on the dashboard (which
+  // clears + rebuilds only when the account actually differs). Matches the dashboard's
+  // own sign-out behaviour.
   await signOut({ callbackUrl: '/' })
 }
 
@@ -79,13 +70,11 @@ export default function CategoryPage() {
     const cached = localStorage.getItem('playlist-categories')
     if (cached) {
       const parsed = JSON.parse(cached)
-      const playlists = parsed.categorizedPlaylists[categoryName] || []
-      // Filter out empty playlists and hidden playlists
-      const nonEmptyPlaylists = playlists.filter((playlist: YouTubePlaylist) => 
-        playlist.contentDetails.itemCount !== 0 && 
-        playlist.contentDetails.itemCount > 0
-      )
-      return nonEmptyPlaylists
+      // Show EVERY playlist in this category — this must match the count shown on the
+      // dashboard grid. The old code filtered out playlists whose itemCount was 0 OR
+      // missing; when the video-count field was absent it hid ALL of them, making the
+      // category look empty even though the grid showed a count.
+      return parsed.categorizedPlaylists?.[categoryName] || []
     }
   } catch (e) {}
   return []
@@ -261,7 +250,7 @@ export default function CategoryPage() {
     // Apply video count filter
     if (videoCountFilter !== 'all') {
       filtered = filtered.filter(playlist => {
-        const count = playlist.contentDetails.itemCount
+        const count = playlist.contentDetails?.itemCount ?? 0
         switch (videoCountFilter) {
           case '1-10':
             return count >= 1 && count <= 10
@@ -283,9 +272,9 @@ export default function CategoryPage() {
         case 'name-za':
           return b.snippet.title.localeCompare(a.snippet.title)
         case 'most-videos':
-          return b.contentDetails.itemCount - a.contentDetails.itemCount
+          return (b.contentDetails?.itemCount ?? 0) - (a.contentDetails?.itemCount ?? 0)
         case 'fewest-videos':
-          return a.contentDetails.itemCount - b.contentDetails.itemCount
+          return (a.contentDetails?.itemCount ?? 0) - (b.contentDetails?.itemCount ?? 0)
         case 'newest-first':
           return 0 // Default order (would need date info)
         case 'oldest-first':
@@ -431,7 +420,7 @@ export default function CategoryPage() {
                       }}
                     />
                     <div className="absolute bottom-2 right-2 bg-black/70 text-white text-xs px-2 py-1 rounded">
-                      {playlist.contentDetails.itemCount} videos
+                      {playlist.contentDetails?.itemCount ?? 0} videos
                     </div>
                   </div>
                   
@@ -441,7 +430,7 @@ export default function CategoryPage() {
                       {playlist.snippet.title}
                     </h3>
                     <p className="text-slate-400 text-sm">
-                      {playlist.contentDetails.itemCount === 1 ? '1 video' : `${playlist.contentDetails.itemCount} videos`}
+                      {(playlist.contentDetails?.itemCount ?? 0) === 1 ? '1 video' : `${playlist.contentDetails?.itemCount ?? 0} videos`}
                     </p>
                   </div>
                 </div>

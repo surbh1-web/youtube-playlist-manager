@@ -22,6 +22,7 @@ export async function GET(request: NextRequest) {
     const userPreferences = {
       playlists: preferences.playlists,
       categories: preferences.categories,
+      categoryEmojis: preferences.categoryEmojis || {},
       lastSync: preferences.lastSync
       // Note: lockedPlaylists omitted for security
     }

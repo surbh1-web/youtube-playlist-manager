@@ -349,6 +349,7 @@ export async function POST(request: NextRequest) {
       ...prefs,
       playlists: updatedPlaylists,
       categories: [...taxonomy].sort(),
+      categoryEmojis: emojis,
       lastSync: now,
     })
 

@@ -119,6 +119,9 @@ export default function Dashboard() {
   const [newPlaylists, setNewPlaylists] = useState<any[]>([])
   const [deletedCount, setDeletedCount] = useState<number>(0)
   const [cacheAge, setCacheAge] = useState<string>('')
+  const [recatBlocked, setRecatBlocked] = useState(false)
+  const [refreshBlocked, setRefreshBlocked] = useState(false)
+  const [rateLimitMsg, setRateLimitMsg] = useState<string | null>(null)
 
   const getHiddenPlaylists = (): string[] => {
     try {
@@ -185,17 +188,46 @@ export default function Dashboard() {
   // model and slotted into the EXISTING categories. All other playlists keep their cached
   // category — no full rebuild. Playlist metadata is still fetched (cheap, no LLM) so new
   // playlists render with thumbnails and the grouping stays correct.
-  const incrementalCategorize = async (changed: { id: string; title: string }[]) => {
+  // categorizeNew=false (automatic loads): reconstruct existing categories, show any new
+  // playlist as "Uncategorized" — NO LLM call. categorizeNew=true (manual Refresh, which is
+  // rate-limited): actually categorize the new playlists. This keeps the rate limit meaningful
+  // (a browser refresh can't sneak in LLM categorization).
+  const incrementalCategorize = async (changed: { id: string; title: string }[], categorizeNew = false) => {
     try {
       const playlistsResponse = await fetch("/api/youtube/playlists", { credentials: 'include' })
       if (!playlistsResponse.ok) { return fetchPlaylistsAndCategories(false) }
       const all: YouTubePlaylist[] = (await playlistsResponse.json()).playlists || []
 
-      // Derive id -> category from the current cache (existing playlists keep their category).
-      // Also preserve the last FULL-rebuild timestamp — incremental updates must NOT reset
-      // the 30-day content-drift window; only a full "Re-categorize All" does.
+      // Derive id -> category. The SERVER prefs are the stable source of truth: they persist
+      // across logins, cache clears, and devices. Seeding from them is what stops a full LLM
+      // rebuild on every login — we reuse the categories already saved rather than re-deriving.
+      // The localStorage cache is layered on top for the freshest local state (e.g. a
+      // just-done "Move to..."). Also preserve the last FULL-rebuild timestamp — incremental
+      // updates must NOT reset the 30-day window; only "Re-categorize All" does.
       const idToCat: Record<string, string> = {}
       let prevFullRebuild: string | undefined
+      try {
+        const prefsRes = await fetch("/api/preferences", { credentials: 'include' })
+        if (prefsRes.ok) {
+          const prefs = await prefsRes.json()
+          const pls = prefs.playlists || {}
+          for (const id of Object.keys(pls)) {
+            const cat = pls[id]?.category
+            if (cat && cat !== 'Uncategorized') idToCat[id] = cat
+          }
+          // Restore server-saved emojis into localStorage so they survive a cache clear.
+          // Server fills gaps; any existing local emoji wins (it's the freshest).
+          if (prefs.categoryEmojis && Object.keys(prefs.categoryEmojis).length) {
+            try {
+              const existing = localStorage.getItem('category-emojis')
+              const merged = existing
+                ? { ...prefs.categoryEmojis, ...JSON.parse(existing) }
+                : prefs.categoryEmojis
+              localStorage.setItem('category-emojis', JSON.stringify(merged))
+            } catch {}
+          }
+        }
+      } catch {}
       try {
         const cached = JSON.parse(localStorage.getItem('playlist-categories') || '{}')
         prevFullRebuild = cached.lastFullRebuild
@@ -205,47 +237,59 @@ export default function Dashboard() {
         }
       } catch {}
 
-      // Self-healing: categorize the changed playlists AND any current playlist that is
-      // missing from the cache (e.g. a new playlist that a prior sync recorded but never
-      // displayed). Nothing missing/changed => no model calls, just a regroup.
-      const toDo = new Map<string, { id: string; name: string }>()
-      for (const c of changed) toDo.set(c.id, { id: c.id, name: c.title })
-      for (const pl of all) {
-        if (!idToCat[pl.id]) toDo.set(pl.id, { id: pl.id, name: pl.snippet?.title || '' })
+      // Nothing ever categorized (fresh account: empty server prefs AND empty cache) →
+      // bootstrap with a proper full domain-partition rebuild, not the flat incremental path.
+      if (Object.keys(idToCat).length === 0) {
+        return fetchPlaylistsAndCategories(false)
       }
-      const list = Array.from(toDo.values())
-      const resp = list.length
-        ? await fetch("/api/categorize-new", {
-            method: "POST",
-            credentials: 'include',
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ playlists: list.map(x => ({ id: x.id, name: x.name, description: "" })) }),
-          })
-        : null
-      if (resp && resp.ok) {
-        const data = await resp.json()
-        for (const cp of (data.categorizedPlaylists || [])) idToCat[cp.id] = cp.category
-        if (data.categoryEmojis) {
-          try {
-            const existingEmojis = localStorage.getItem('category-emojis')
-            const merged = existingEmojis
-              ? { ...JSON.parse(existingEmojis), ...data.categoryEmojis }
-              : data.categoryEmojis
-            localStorage.setItem('category-emojis', JSON.stringify(merged))
-          } catch {}
+
+      // Only the MANUAL Refresh (categorizeNew=true, rate-limited) sends new playlists to the
+      // LLM. On automatic loads we skip this entirely — new playlists just fall into the
+      // "Uncategorized" bucket in the regroup below, with zero model calls.
+      if (categorizeNew) {
+        const toDo = new Map<string, { id: string; name: string }>()
+        for (const c of changed) toDo.set(c.id, { id: c.id, name: c.title })
+        for (const pl of all) {
+          if (!idToCat[pl.id]) toDo.set(pl.id, { id: pl.id, name: pl.snippet?.title || '' })
+        }
+        const list = Array.from(toDo.values())
+        const resp = list.length
+          ? await fetch("/api/categorize-new", {
+              method: "POST",
+              credentials: 'include',
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ playlists: list.map(x => ({ id: x.id, name: x.name, description: "" })) }),
+            })
+          : null
+        if (resp && resp.ok) {
+          const data = await resp.json()
+          for (const cp of (data.categorizedPlaylists || [])) idToCat[cp.id] = cp.category
+          if (data.categoryEmojis) {
+            try {
+              const existingEmojis = localStorage.getItem('category-emojis')
+              const merged = existingEmojis
+                ? { ...JSON.parse(existingEmojis), ...data.categoryEmojis }
+                : data.categoryEmojis
+              localStorage.setItem('category-emojis', JSON.stringify(merged))
+            } catch {}
+          }
         }
       }
 
-      // Regroup ALL playlists (existing keep cached category; changed use the new one;
-      // deleted naturally drop out since they are not in `all`).
+      // Regroup. A playlist with NO category yet (a brand-new one not categorized) is left
+      // OUT of the display entirely — no floating "Uncategorized" bucket. It appears only
+      // once it's been categorized (auto on a fresh login, or when the user hits Refresh).
+      // Deleted playlists drop out naturally (they're not in `all`).
       const grouped: Record<string, YouTubePlaylist[]> = {}
       all.forEach((pl) => {
-        const cat = idToCat[pl.id] || 'Uncategorized'
+        const cat = idToCat[pl.id]
+        if (!cat) return
         if (!grouped[cat]) grouped[cat] = []
         grouped[cat].push(pl)
       })
       setCategorizedPlaylists(grouped)
       setCacheAge('Just now')
+      setLoading(false)
       const cacheData: CachedData = {
         categorizedPlaylists: grouped,
         lastUpdated: new Date().toISOString(),
@@ -259,7 +303,7 @@ export default function Dashboard() {
     }
   }
 
-  const runBackgroundSync = async () => {
+  const runBackgroundSync = async (categorizeNew = false) => {
     try {
       setSyncStatus('syncing')
       
@@ -310,7 +354,7 @@ export default function Dashboard() {
         ...(result.newPlaylists || []).map((p: any) => ({ id: p.id, title: p.title })),
         ...(result.renamedPlaylists || []).map((p: any) => ({ id: p.id, title: p.newTitle })),
       ]
-      await incrementalCategorize(changed)
+      await incrementalCategorize(changed, categorizeNew)
       
       setSyncStatus('done')
       setTimeout(() => setSyncStatus('idle'), 3000)
@@ -475,7 +519,18 @@ export default function Dashboard() {
 
   useEffect(() => {
   if (!sessionData.data?.user?.email) return // Wait for session to load
-  
+
+  // Distinguish a FRESH app-open / login (auto-categorize new playlists) from a browser
+  // refresh / Cmd+R within the same session (no LLM). sessionStorage survives a reload but
+  // is cleared when the tab closes, so its absence marks the first load of a new session.
+  let freshSession = false
+  try {
+    if (!sessionStorage.getItem('ytpm-session-started')) {
+      freshSession = true
+      sessionStorage.setItem('ytpm-session-started', '1')
+    }
+  } catch {}
+
   if (Object.keys(categorizedPlaylists).length > 0) {
     const cached = localStorage.getItem('playlist-categories')
     if (cached) {
@@ -488,19 +543,20 @@ export default function Dashboard() {
       console.log("Cache loaded successfully")
     }
     setLoading(false)
-    // Cache is shown instantly; now reconcile in the background so new/renamed/deleted
-    // playlists (and any missing ones) get picked up incrementally. Without this, a load
-    // with an existing cache never checks YouTube for changes.
-    runBackgroundSync()
+    // Reconcile in the background. On a fresh login (freshSession) new playlists ARE
+    // categorized; on a plain Cmd+R they are not (no LLM, no rate-limit bypass).
+    runBackgroundSync(freshSession)
     return
   }
-  fetchPlaylistsAndCategories()
+  // No cache on this device/login: reconstruct from SERVER-stored categories (stable). On a
+  // fresh login also categorize genuinely-new playlists; on a reload, leave them Uncategorized.
+  incrementalCategorize([], freshSession)
 }, [sessionData.data?.user?.email])
 
   useEffect(() => {
     const timer = setTimeout(() => {
       if (loading && Object.keys(categorizedPlaylists).length === 0) {
-        fetchPlaylistsAndCategories()
+        incrementalCategorize([])
       }
     }, 3000)
     return () => clearTimeout(timer)
@@ -511,7 +567,7 @@ export default function Dashboard() {
     const timer = setTimeout(() => {
       if (loading && Object.keys(categorizedPlaylists).length === 0) {
         console.log('Fallback fetch triggered after 3 second timeout')
-        fetchPlaylistsAndCategories()
+        incrementalCategorize([])
       }
     }, 3000)
     return () => clearTimeout(timer)
@@ -530,7 +586,41 @@ export default function Dashboard() {
     }
   }, [Object.keys(categorizedPlaylists).length])
 
-  const handleRecategorize = () => {
+  // ── Rate limiting (production only; enforced server-side, gated by RATE_LIMIT_ENABLED) ──
+  const checkRateLimit = async (action: 'recategorize' | 'refresh', peek = false) => {
+    try {
+      const r = await fetch('/api/rate-limit', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, peek }),
+      })
+      if (!r.ok) return { allowed: true, retryAfterMs: 0 }
+      return await r.json()
+    } catch {
+      return { allowed: true, retryAfterMs: 0 }
+    }
+  }
+
+  const grayAction = (action: 'recategorize' | 'refresh', retryAfterMs: number) => {
+    const ms = retryAfterMs && retryAfterMs > 0 ? retryAfterMs : 60 * 60 * 1000
+    if (action === 'recategorize') setRecatBlocked(true)
+    else setRefreshBlocked(true)
+    setTimeout(() => {
+      if (action === 'recategorize') setRecatBlocked(false)
+      else setRefreshBlocked(false)
+    }, ms)
+  }
+
+  const handleRecategorize = async () => {
+    const rl = await checkRateLimit('recategorize')
+    if (!rl.allowed) {
+      setRateLimitMsg("You've reached the maximum number of Re-categorize attempts. Please try again in an hour.")
+      grayAction('recategorize', rl.retryAfterMs)
+      return
+    }
+    // If that was the last allowed use, gray the button now (not just on the next attempt).
+    if (typeof rl.remaining === 'number' && rl.remaining <= 0) grayAction('recategorize', rl.retryAfterMs)
     setIsRecatRunning(true)
     setRecatProgress('Fetching your playlists...')
     localStorage.removeItem('playlist-categories')
@@ -540,6 +630,30 @@ export default function Dashboard() {
     setRecategorizing(true)
     fetchPlaylistsAndCategories(false)
   }
+
+  const handleRefresh = async () => {
+    const rl = await checkRateLimit('refresh')
+    if (!rl.allowed) {
+      setRateLimitMsg("You've reached the maximum number of Refresh attempts. Please try again in an hour.")
+      grayAction('refresh', rl.retryAfterMs)
+      return
+    }
+    // Manual Refresh DOES categorize new playlists (categorizeNew=true) — this is the
+    // rate-limited path. A browser refresh / automatic load passes false and makes NO LLM call.
+    runBackgroundSync(true)
+    // If that was the last allowed use, gray the button now (not just on the next attempt).
+    if (typeof rl.remaining === 'number' && rl.remaining <= 0) grayAction('refresh', rl.retryAfterMs)
+  }
+
+  // On load, gray a button that is already over its limit (so it survives page reloads).
+  useEffect(() => {
+    if (!sessionData.data?.user?.email) return
+    ;(['recategorize', 'refresh'] as const).forEach(async (action) => {
+      const rl = await checkRateLimit(action, true)
+      if (rl && rl.enabled && rl.allowed === false) grayAction(action, rl.retryAfterMs)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionData.data?.user?.email])
 
   const getThumbnailUrl = (playlist: YouTubePlaylist) => {
     return playlist.snippet.thumbnails.high?.url ||
@@ -801,13 +915,28 @@ export default function Dashboard() {
             </p>
           </div>
           <div className="flex flex-col sm:flex-row gap-2">
+            {!isRecatRunning && (
+              <button
+                onClick={handleRefresh}
+                disabled={refreshBlocked}
+                title="Syncs your latest YouTube playlist changes (new, deleted, renamed) — max 5 times per hour"
+                className={`px-4 py-2 rounded-lg text-white ${refreshBlocked ? 'bg-gray-600 opacity-50 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700'}`}
+              >
+                Refresh
+              </button>
+            )}
             {isRecatRunning ? (
               <div className="text-center py-2">
                 <div className="text-white text-sm font-medium">{recatProgress || 'Categorizing your playlists...'}</div>
                 <div className="text-gray-400 text-xs mt-1">This may take 1-2 minutes. Please wait.</div>
               </div>
             ) : (
-              <button onClick={handleRecategorize} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">
+              <button
+                onClick={handleRecategorize}
+                disabled={recatBlocked}
+                title="Rebuilds all categories from scratch — max 5 times per hour"
+                className={`px-4 py-2 rounded-lg text-white ${recatBlocked ? 'bg-gray-600 opacity-50 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
+              >
                 Re-categorize All Playlists
               </button>
             )}
@@ -1174,6 +1303,28 @@ export default function Dashboard() {
           </div>
         )}
         {/* Show nothing when syncStatus is 'idle' or 'done' */}
+
+        {/* Rate-limit reached pop-up */}
+        {rateLimitMsg && (
+          <div
+            className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60]"
+            onClick={() => setRateLimitMsg(null)}
+          >
+            <div
+              className="bg-slate-800 border border-slate-600 rounded-xl p-6 max-w-sm mx-4 text-center shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-lg font-semibold text-white mb-2">Limit reached</h3>
+              <p className="text-slate-300 mb-5">{rateLimitMsg}</p>
+              <button
+                onClick={() => setRateLimitMsg(null)}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-lg"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
