@@ -39,3 +39,4 @@ Open [http://localhost:3000](http://localhost:3000).
 
 - User preferences (playlist-to-category assignments, locks, etc.) are stored per-user as JSON files under `data/preferences/`, keyed by a SHA-256 hash of the user's email — this directory is gitignored and created automatically at runtime.
 - The Google OAuth access token is kept server-side only (inside the encrypted NextAuth JWT) and is never sent to the browser.
+- **Erase my data and sign out** — a dashboard button that deletes all of the signed-in user's stored playlist data (their file under `data/preferences/` and the playlist cache in the browser's localStorage) and then signs them out. It does not affect the user's Google or YouTube account, and login works as before; playlist data is rebuilt from YouTube on the next login. Per-user rate-limit counters are kept so the button can't be used to reset the hourly cap.
