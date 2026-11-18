@@ -93,7 +93,7 @@ const LOCAL_PLAYLIST_DATA_KEYS = [
 
 const handleDeleteDataAndLogout = async () => {
   const confirmed = window.confirm(
-    'Delete all your playlist data from this app and log out?\n\n' +
+    'Erase all your playlist data from this app and sign out?\n\n' +
     'Your YouTube account and playlists are not affected. Your data will be rebuilt the next time you log in.'
   )
   if (!confirmed) return
@@ -991,7 +991,7 @@ export default function Dashboard() {
               title="Removes all your playlist data from this app and logs you out"
               className="bg-red-900/60 hover:bg-red-800 text-red-100 px-3 py-2 rounded-lg text-sm transition-colors"
             >
-              Delete my playlist data and logout
+              Erase my data and sign out
             </button>
           </div>
         </div>
