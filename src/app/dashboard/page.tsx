@@ -82,6 +82,40 @@ const handleSignOut = async () => {
   await signOut({ callbackUrl: '/' })
 }
 
+// Playlist data cached in this browser (does not include the login session).
+const LOCAL_PLAYLIST_DATA_KEYS = [
+  'playlist-categories',
+  'category-emojis',
+  'category-themes',
+  'hidden-playlists',
+  'video-search-index',
+]
+
+const handleDeleteDataAndLogout = async () => {
+  const confirmed = window.confirm(
+    'Delete all your playlist data from this app and log out?\n\n' +
+    'Your YouTube account and playlists are not affected. Your data will be rebuilt the next time you log in.'
+  )
+  if (!confirmed) return
+
+  try {
+    // 1. Delete server-side data first. If this fails, keep the user logged in with their data.
+    const res = await fetch('/api/delete-my-data', { method: 'POST' })
+    if (!res.ok) throw new Error(`Delete failed (${res.status})`)
+
+    // 2. Clear browser-side cache.
+    LOCAL_PLAYLIST_DATA_KEYS.forEach((k) => localStorage.removeItem(k))
+    sessionStorage.removeItem('ytpm-session-started')
+  } catch (error) {
+    console.error('Error deleting playlist data:', error)
+    window.alert('Could not delete your data. You are still logged in — please try again.')
+    return
+  }
+
+  // 3. Log out (same sign-out flow as the existing button).
+  await signOut({ callbackUrl: '/' })
+}
+
 export default function Dashboard() {
   const sessionData = useSession()
   const router = useRouter()
@@ -951,6 +985,13 @@ export default function Dashboard() {
               className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-sm transition-colors"
             >
               Sign Out
+            </button>
+            <button
+              onClick={handleDeleteDataAndLogout}
+              title="Removes all your playlist data from this app and logs you out"
+              className="bg-red-900/60 hover:bg-red-800 text-red-100 px-3 py-2 rounded-lg text-sm transition-colors"
+            >
+              Delete my playlist data and logout
             </button>
           </div>
         </div>

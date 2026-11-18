@@ -61,6 +61,30 @@ export const readPreferences = async (userKey: string): Promise<UserPreferences>
   }
 }
 
+// Wipes every playlist-related record for a user (playlists, categories, emojis, locks,
+// lastSync). The rate-limit ledger is intentionally kept: it holds only attempt timestamps
+// (no playlist data) and keeping it stops "delete data" from being used to reset the
+// hourly re-categorize/refresh cap. Returns true if the data is gone.
+export const deleteUserPlaylistData = async (userKey: string): Promise<boolean> => {
+  if (!userKey) return false
+  try {
+    const existing = await readPreferences(userKey)
+    const rateLimits = existing.rateLimits || {}
+    if (Object.keys(rateLimits).length > 0) {
+      return await writePreferences(userKey, { ...DEFAULT_PREFERENCES, rateLimits })
+    }
+    // Nothing worth keeping: remove the file outright (ENOENT = already gone = success).
+    try {
+      await fs.unlink(filePathForUser(userKey))
+    } catch (err: any) {
+      if (err?.code !== 'ENOENT') throw err
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
 export const writePreferences = async (
   userKey: string,
   data: UserPreferences
